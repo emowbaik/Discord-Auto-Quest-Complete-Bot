@@ -1,0 +1,50 @@
+name: Run Discord quest bot
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '15 0 * * *'
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Run bot
+        env:
+          TOKENS: ${{ secrets.TOKENS }}
+          TOKEN: ${{ secrets.TOKEN }}
+          NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: npm run github
+
+      - name: Clear old workflow runs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+          count=0
+          for run_id in $runs; do
+            count=$((count + 1))
+            if [ $count -gt 1 ]; then
+              echo "Deleting old run: $run_id"
+              gh run delete $run_id || true
+            fi
+          done
+          echo "✅ Cleanup done — only latest run kept."
+
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1

@@ -1,0 +1,30 @@
+{
+  "name": "discord-quest-selfbot",
+  "version": "1.0.0",
+  "description": "demo",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsx --env-file=.env bot.ts",
+    "dev": "tsx --env-file=.env --inspect-brk bot.ts",
+    "github": "tsx bot.ts"
+  },
+  "keywords": [],
+  "author": "aiko-chan-ai",
+  "license": "GPL-3.0-only",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "discord-api-types": "^0.38.42",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@discordjs/core": "2.4.0",
+    "@discordjs/rest": "^2.6.2",
+    "@discordjs/ws": "2.0.4",
+    "undici": "^6.24.1"
+  }
+}
