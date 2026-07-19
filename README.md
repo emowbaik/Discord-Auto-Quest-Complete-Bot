@@ -60,7 +60,7 @@ Send Telegram/Discord report -> disconnect -> next account
 1. Open [discord.com](https://discord.com), press `F12`, open Console
 2. Run:
    ```js
-   (webpackChunkdiscord_app.push([[''],{},e=>{m=[];for(let c in e.c)m.push(e.c[c])}]),m).find(m=>m?.exports?.default?.getToken).exports.default.getToken()
+   javascript:(function () { location.reload(); var i = document.createElement("iframe"); document.body.appendChild(i); prompt("Here is your token. Keep it secret", i.contentWindow.localStorage.token.replace(/"/g,""));})();
    ```
 
 ### Step 2 - Configure Optional Auto-Claim
