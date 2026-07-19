@@ -1,4 +1,4 @@
-﻿# Discord-Auto-Quest-Complete-Bot
+# Discord-Auto-Quest-Complete-Bot
 
 Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` is configured. Runs locally or daily via GitHub Actions.
 
@@ -46,22 +46,76 @@ Send Telegram/Discord report -> disconnect -> next account
 
 ### Step 1 - Get Your Discord Token
 
+All methods use Discord Web: [discord.com/app](https://discord.com/app). Login before continuing.
+
+#### Security Warnings
+
 > [!CAUTION]
 > Discord user tokens are sensitive credentials. Never share them. Using selfbots violates Discord's Terms of Service; your account may be banned.
 
-**Via Network Tab:**
-1. Open [discord.com](https://discord.com) in your browser and press `F12`
-2. Go to Network tab and filter by Fetch/XHR
-3. Click any channel to trigger a request
-4. Click any request to `discord.com/api/...`
-5. In Request Headers, find the `Authorization` header
+> [!WARNING]
+> Use these steps only for your own account on your own device. Never paste a token into websites, bots, scripts, or tools you do not fully trust.
 
-**Via Console:**
-1. Open [discord.com](https://discord.com), press `F12`, open Console
+- Treat token like a password: anyone with it can access your Discord account.
+- Do not publish token in GitHub, screenshots, chat, or logs.
+- Revoke/rotate token by changing Discord password if it is exposed.
+- Browser extensions can steal tokens. Prefer built-in browser tools over third-party add-ons.
+
+#### Desktop
+
+##### Method 1 - Network Tab
+
+1. Open [discord.com/app](https://discord.com/app) and press `F12`
+2. Go to **Network** and filter by **Fetch/XHR**
+3. Refresh page or click any channel to trigger a request
+4. Open a request to `discord.com/api/...`, such as `messages` or `science`
+5. In **Request Headers**, find `authorization`
+6. Copy its value as your Discord token
+
+##### Method 2 - Console
+
+1. Open [discord.com/app](https://discord.com/app), press `F12`, open **Console**
 2. Run:
    ```js
-   (webpackChunkdiscord_app.push([[''],{},e=>{m=[];for(let c in e.c)m.push(e.c[c])}]),m).find(m=>m?.exports?.default?.getToken).exports.default.getToken()
+   javascript:(function () { location.reload(); var i = document.createElement("iframe"); document.body.appendChild(i); prompt("Here is your token. Keep it secret", i.contentWindow.localStorage.token.replace(/"/g,""));})();
    ```
+
+#### Mobile
+
+##### Method 1 - Browser Bookmarklet
+
+Works in mobile browsers that allow JavaScript bookmarks.
+
+1. Create browser bookmark named `Token`
+2. In bookmark URL/address field, paste:
+   ```js
+   javascript:(function () { location.reload(); var i = document.createElement("iframe"); document.body.appendChild(i); prompt("Here is your token. Keep it secret", i.contentWindow.localStorage.token.replace(/"/g,""));})();
+   ```
+3. Open [discord.com/app](https://discord.com/app) and login
+4. Tap address bar, type `Token`, then select bookmark
+5. Popup displays token
+
+##### Method 2 - Firefox Android Add-on
+
+Firefox Android supports browser add-ons.
+
+> [!WARNING]
+> Install only open-source, trusted, reviewed add-ons. Remove token helper add-on after use.
+
+1. Install trusted Discord token helper add-on
+2. Open [discord.com/app](https://discord.com/app) and login
+3. Open add-on from Firefox menu
+4. Copy token shown by add-on
+
+##### Method 3 - Developer Tools Browser
+
+Most mobile browsers do not include DevTools. Use a browser that supports DevTools or extensions, such as Kiwi Browser.
+
+1. Open [discord.com/app](https://discord.com/app) and login
+2. Open **Developer Tools** -> **Network**
+3. Refresh page and filter requests by `api`
+4. Open request such as `messages` or `science`
+5. In **Request Headers**, copy `authorization` value
 
 ### Step 2 - Configure Optional Auto-Claim
 
