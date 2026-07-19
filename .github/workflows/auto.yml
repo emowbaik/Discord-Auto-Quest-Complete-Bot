@@ -23,6 +23,7 @@ jobs:
           NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: npm run github
 
       - name: Clear old workflow runs
@@ -39,7 +40,7 @@ jobs:
               gh run delete $run_id || true
             fi
           done
-          echo "✅ Cleanup done — only latest run kept."
+          echo "âœ… Cleanup done â€” only latest run kept."
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
@@ -48,3 +49,4 @@ jobs:
       actions: write
     steps:
       - uses: liskin/gh-workflow-keepalive@v1
+
