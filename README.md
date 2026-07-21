@@ -11,7 +11,7 @@ Automated Discord quest completion selfbot: auto-enroll and auto-complete suppor
 - Telegram notifications: per-account completion summary sent to your chat
 - Discord webhook embeds: rich status cards sent to Discord when configured
 - Workflow keepalive: helps prevent scheduled workflow from being auto-disabled due to repository inactivity
-- Daily schedule: runs automatically at 07:15 WIB (00:15 UTC) via GitHub Actions
+- Daily schedule: runs automatically at 01:13 WITA (17:13 UTC) via GitHub Actions
 - Manual trigger: run anytime from the Actions tab
 
 ## How It Works

@@ -3,7 +3,7 @@ name: Run Discord quest bot
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '15 0 * * *'
+    - cron: '13 17 * * *'
 
 jobs:
   run-bot:
