@@ -5,6 +5,8 @@
 
 Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` or `NONECAP_API_KEY` is configured. Runs locally or daily via GitHub Actions.
 
+![Repository architecture infographic](assets/repo_infographic.svg)
+
 ## Features
 
 - Auto-enroll: automatically accepts available quests
