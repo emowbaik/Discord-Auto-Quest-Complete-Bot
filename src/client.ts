@@ -21,25 +21,29 @@ async function makeRequest(
 }
 
 const originalSend = WebSocketShard.prototype.send;
-WebSocketShard.prototype.send = async function (payload: GatewaySendPayload) {
-	if (payload.op === GatewayOpcodes.Identify) {
-		payload.d = {
-			token: payload.d.token,
-			properties: {
-				...Constants.Properties,
-				is_fast_connect: false,
-				gateway_connect_reasons: 'AppSkeleton',
-			},
-			capabilities: 0,
-			presence: payload.d.presence,
-			compress: payload.d.compress,
-			client_state: {
-				guild_versions: {},
-			},
-		} as any;
-	}
-	return originalSend.call(this, payload);
-};
+// ponytail: guard against double-patch when module re-evaluated (tsx watch)
+if (!(WebSocketShard.prototype as any).__questPatched) {
+	(WebSocketShard.prototype as any).__questPatched = true;
+	WebSocketShard.prototype.send = async function (payload: GatewaySendPayload) {
+		if (payload.op === GatewayOpcodes.Identify) {
+			payload.d = {
+				token: payload.d.token,
+				properties: {
+					...Constants.Properties,
+					is_fast_connect: false,
+					gateway_connect_reasons: 'AppSkeleton',
+				},
+				capabilities: 0,
+				presence: payload.d.presence,
+				compress: payload.d.compress,
+				client_state: {
+					guild_versions: {},
+				},
+			} as any;
+		}
+		return originalSend.call(this, payload);
+	};
+}
 
 export class ClientQuest extends Client {
 	public questManager: QuestManager | null = null;
@@ -80,13 +84,16 @@ export class ClientQuest extends Client {
 		};
 		super({ rest, gateway });
 		this.websocketManager = gateway;
-		gateway.on('error', () => null);
+		gateway.on('error', (e) => console.error('[Gateway]', e));
 	}
 	connect() {
-		return Utils.updateLatestBuildVersion().then(() => this.websocketManager.connect()).catch((e) => {
-			console.error('Error during client connection:', e.message);
-			return sendTelegram('Discord quest bot connection error: ' + e.message);
-		});
+		return Utils.updateLatestBuildVersion()
+			.then(() => this.websocketManager.connect())
+			.catch(async (e: Error) => {
+				console.error('Error during client connection:', e.message);
+				await sendTelegram('Discord quest bot connection error: ' + e.message);
+				throw e;
+			});
 	}
 	destroy() {
 		return this.websocketManager.destroy();

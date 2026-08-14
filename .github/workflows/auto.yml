@@ -21,6 +21,9 @@ jobs:
           TOKENS: ${{ secrets.TOKENS }}
           TOKEN: ${{ secrets.TOKEN }}
           NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
+          NONECAP_API_KEY: ${{ secrets.NONECAP_API_KEY }}
+          NONECAP_PROXY: ${{ secrets.NONECAP_PROXY }}
+          NONECAP_WAIT: ${{ secrets.NONECAP_WAIT }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

@@ -42,7 +42,8 @@ export class Constants extends null {
 		client_build_number: 5169,
 		client_event_source: null,
 		client_launch_id: randomUUID(),
-		launch_signature: '1771754995045142953', // ?
+		// ponytail: static signature mirrors observed Android client; randomize if detection needed
+		launch_signature: '1771754995045142953',
 		client_app_state: 'active',
 		client_heartbeat_session_id: randomUUID(),
 	};

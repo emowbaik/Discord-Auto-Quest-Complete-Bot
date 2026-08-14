@@ -1,18 +1,16 @@
 import { Constants } from './constants';
 import { fetch } from 'undici';
-import * as readline from 'readline/promises';
-import { stdin as input, stdout as output } from 'process';
 import type { ClientQuest } from './client';
 
 export class Utils extends null {
+	private static buildFetch: Promise<void> | null = null;
+
 	public static makeHeaders(init: HeadersInit | undefined) {
 		let myHeaders = new Headers(init);
 		const isAndroidRequest = myHeaders.get('AndroidRequest') === 'true';
 		myHeaders.delete('AndroidRequest');
-		myHeaders.set(
-			'Authorization',
-			myHeaders.get('Authorization')!.replace('Bot ', ''),
-		);
+		const auth = myHeaders.get('Authorization');
+		if (auth) myHeaders.set('Authorization', auth.replace(/^Bot\s+/i, ''));
 		myHeaders.append('accept-language', 'en-US');
 		myHeaders.append('x-debug-options', 'bugReporterEnabled');
 		myHeaders.append('x-discord-locale', 'en-US');
@@ -208,16 +206,17 @@ export class Utils extends null {
 			});
 		return { success, error };
 	}
-	public static async askQuestion(promptText: string): Promise<string> {
-		const rl = readline.createInterface({ input, output });
-		try {
-			const answer = await rl.question(promptText);
-			return answer;
-		} finally {
-			rl.close();
-		}
+	public static updateLatestBuildVersion(): Promise<void> {
+		if (Utils.buildFetch) return Utils.buildFetch;
+		// ponytail: in-memory per-process cache; upgrade to file cache if mid-run build changes matter
+		Utils.buildFetch = Utils._fetchBuild().catch((error) => {
+			Utils.buildFetch = null;
+			throw error;
+		});
+		return Utils.buildFetch;
 	}
-	public static async updateLatestBuildVersion(): Promise<void> {
+
+	private static async _fetchBuild(): Promise<void> {
 		try {
 			console.info(
 				'Fetching latest Discord build number (Desktop Version)...',
@@ -269,32 +268,6 @@ export class Utils extends null {
 			const errorMessage =
 				error instanceof Error ? error.message : String(error);
 			console.error('Error fetching latest build number:', errorMessage);
-			return;
 		}
-	}
-	public static async extractWebhookInfo(): Promise<{
-		id: string;
-		token: string;
-	} | null> {
-		const webhookUrl = process.env.WEBHOOK_URL;
-		if (!webhookUrl) {
-			console.warn('WEBHOOK_URL not set in environment variables.');
-			return null;
-		}
-		// Check valid
-		const req = await fetch(webhookUrl);
-		if (!req.ok) {
-			console.warn(`Failed to fetch webhook URL (${req.status})`);
-			return null;
-		}
-		const parts = webhookUrl.split('/');
-		const webhookPathIndex = parts.findIndex((part) => part === 'webhooks');
-		if (webhookPathIndex === -1 || parts.length < webhookPathIndex + 3) {
-			console.warn('Invalid webhook URL format.');
-			return null;
-		}
-		const id = parts[webhookPathIndex + 1];
-		const token = parts[webhookPathIndex + 2];
-		return { id, token };
 	}
 }

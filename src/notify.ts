@@ -26,11 +26,24 @@ const COLORS = {
 	reward: 0x9b59b6,
 };
 
+let warnedNoNotify = false;
+function warnOnceIfNoNotify(): void {
+	if (warnedNoNotify) return;
+	if (!process.env.TG_BOT_TOKEN && !process.env.DISCORD_WEBHOOK_URL) {
+		warnedNoNotify = true;
+		console.warn('[notify] no TG_BOT_TOKEN/TG_CHAT_ID or DISCORD_WEBHOOK_URL configured, reports only in console');
+	}
+}
+
 function escapeHtml(value: string): string {
 	return value
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')
 		.replace(/>/g, '&gt;');
+}
+
+function escapeDiscord(value: string): string {
+	return value.replace(/([`*_~|\\])/g, '\\$1');
 }
 
 function nowWib(): string {
@@ -42,6 +55,7 @@ function nowWib(): string {
 }
 
 export async function sendTelegram(content: string): Promise<void> {
+	warnOnceIfNoNotify();
 	const token = process.env.TG_BOT_TOKEN;
 	const chatId = process.env.TG_CHAT_ID;
 	if (!token || !chatId) return;
@@ -66,6 +80,8 @@ export async function sendTelegram(content: string): Promise<void> {
 }
 
 async function sendDiscordEmbed(embed: DiscordEmbed): Promise<void> {
+	// webhook URL is bearer secret — never log
+	warnOnceIfNoNotify();
 	const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
 	if (!webhookUrl) return;
 
@@ -126,7 +142,7 @@ export function notifyRewardClaimed(questName: string): Promise<void[]> {
 			description: 'Reward has been added to the Discord account.',
 			color: COLORS.reward,
 			fields: [
-				{ name: 'Quest', value: questName || 'Unknown quest', inline: false },
+				{ name: 'Quest', value: escapeDiscord(questName || 'Unknown quest'), inline: false },
 				{ name: 'Status', value: '✅ Claimed', inline: true },
 				{ name: 'Time', value: nowWib(), inline: true },
 			],
@@ -149,13 +165,13 @@ export function notifyAccountReport(report: AccountReport): Promise<void[]> {
 	if (report.error) telegramLines.push('', '🚨 <b>Error</b>', `<code>${escapeHtml(report.error)}</code>`);
 
 	const fields = [
-		{ name: '👤 Account', value: report.account, inline: true },
+		{ name: '👤 Account', value: escapeDiscord(report.account), inline: true },
 		{ name: '🎯 Completed', value: String(report.completed), inline: true },
 		{ name: '🎁 Claimed', value: String(report.claimed), inline: true },
 		{ name: '🔓 Auto-claim', value: report.claimSkipped ? 'Skipped — no NopeCHA key' : 'Enabled', inline: true },
 		{ name: '⚡ Duration', value: `${report.durationSeconds}s`, inline: true },
 	];
-	if (report.error) fields.push({ name: '🚨 Error', value: `\`\`\`${report.error.slice(0, 900)}\`\`\``, inline: false });
+	if (report.error) fields.push({ name: '🚨 Error', value: '```' + escapeDiscord(report.error.slice(0, 900)) + '```', inline: false }); // truncate to avoid embed limit
 
 	return Promise.all([
 		sendTelegram(telegramLines.join('\n')),

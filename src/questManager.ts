@@ -104,10 +104,12 @@ export class QuestManager implements Iterable<Quest> {
 		return this.list().filter((quest) => quest.isCompleted());
 	}
 
+	private static isClaimable(quest: Quest): boolean {
+		return quest.isCompleted() && !quest.hasClaimedRewards();
+	}
+
 	getClaimable(): Quest[] {
-		return this.list().filter(
-			(quest) => quest.isCompleted() && !quest.hasClaimedRewards(),
-		);
+		return this.list().filter(QuestManager.isClaimable);
 	}
 
 	hasQuest(id: string): boolean {
@@ -121,9 +123,7 @@ export class QuestManager implements Iterable<Quest> {
 	}
 
 	filterQuestsValidToRedeem() {
-		return this.list().filter(
-			(quest) => quest.isCompleted() && !quest.hasClaimedRewards(),
-		);
+		return this.getClaimable();
 	}
 
 	getApplicationData(ids: string[]) {
@@ -184,23 +184,22 @@ export class QuestManager implements Iterable<Quest> {
 		quest: Quest,
 		retry = 0,
 		captchaHeaders?: Record<string, string>,
-	): Promise<void> {
-		if (retry === 3) {
+	): Promise<boolean> {
+		if (retry >= 3) {
 			console.error(
 				`Failed to redeem quest "${quest.config.messages.quest_name}" after ${retry} attempts.`,
 			);
-			return;
+			return false;
 		}
 		if (!quest.isCompleted()) {
 			console.error(`Cannot redeem rewards for an incomplete quest.`);
-			return;
+			return false;
 		}
 		if (quest.hasClaimedRewards()) {
 			console.error(`Rewards for this quest have already been claimed.`);
-			return;
+			return false;
 		}
-		try {
-			const agent = new Client('https://discord.com', {
+		const agent = new Client('https://discord.com', {
 				connect: buildConnector({
 					ciphers: [
 						'TLS_AES_128_GCM_SHA256',
@@ -221,6 +220,7 @@ export class QuestManager implements Iterable<Quest> {
 					].join(':'),
 				}),
 			});
+		try {
 			const res = (await this.client.rest.post(
 				`/quests/${quest.id}/claim-reward`,
 				{
@@ -243,9 +243,10 @@ export class QuestManager implements Iterable<Quest> {
 			);
 			await notifyRewardClaimed(quest.config.messages.quest_name);
 			quest.updateUserStatus(res);
+			return true;
 		} catch (err: any) {
-			const rawError = err.rawError as CaptchaDataFromRequest;
-			if (rawError['captcha_key'] && rawError['captcha_sitekey']) {
+			const rawError = (err as any)?.rawError as CaptchaDataFromRequest | undefined;
+			if (rawError?.captcha_key?.length && rawError?.captcha_sitekey) {
 				console.warn(
 					`Captcha required to redeem rewards for quest "${quest.config.messages.quest_name}".`,
 					rawError,
@@ -258,11 +259,9 @@ export class QuestManager implements Iterable<Quest> {
 						`Captcha solver failed for quest "${quest.config.messages.quest_name}". Skipping reward claim.`,
 						captchaError instanceof Error ? captchaError.message : String(captchaError),
 					);
-					return;
+					return false;
 				}
-				console.log(
-					`Captcha Key solved: ${solvedCaptchaKey.slice(0, 30)}<0,30>. Retrying reward redemption...`,
-				);
+				console.log('Captcha solved, retrying reward redemption...');
 				// Todo: Fix "Unknown Message" error when solving captcha for quest rewards claiming.
 				return this.redeemQuest(quest, retry + 1, {
 					'x-captcha-key': solvedCaptchaKey,
@@ -274,7 +273,10 @@ export class QuestManager implements Iterable<Quest> {
 					`Failed to redeem rewards for quest "${quest.config.messages.quest_name}".`,
 					err.message,
 				);
+				return false;
 			}
+		} finally {
+			try { agent.close(); } catch {}
 		}
 	}
 
@@ -378,9 +380,9 @@ export class QuestManager implements Iterable<Quest> {
 		const maxFuture = 10,
 			speed = 7,
 			interval = 7;
-		const enrolledAt = new Date(
-			quest.userStatus?.enrolled_at as any,
-		).getTime();
+		const enrolledAt = quest.userStatus?.enrolled_at
+			? new Date(quest.userStatus.enrolled_at as any).getTime()
+			: Date.now();
 		let completed = false;
 		let fn = async () => {
 			while (true) {
@@ -431,7 +433,10 @@ export class QuestManager implements Iterable<Quest> {
 		applicationName: string,
 	) {
 		const interval = 20;
-		while (!quest.isCompleted()) {
+		let iters = 0;
+		const MAX_ITERS = 300;
+		while (!quest.isCompleted() && iters++ < MAX_ITERS) {
+			if (quest.isExpired()) break;
 			const secondsDone =
 				(quest.userStatus?.progress?.[taskName]?.value as number) || 0;
 			const res = await this.client.rest.post(
@@ -452,6 +457,10 @@ export class QuestManager implements Iterable<Quest> {
 			await new Promise((resolve) =>
 				setTimeout(resolve, interval * 1000),
 			);
+		}
+		if (!quest.isCompleted()) {
+			console.warn(`Quest "${questName}" not completed, stopping loop (expired or max iterations).`);
+			return;
 		}
 		const res = await this.client.rest.post(
 			`/quests/${quest.id}/heartbeat`,
@@ -474,8 +483,11 @@ export class QuestManager implements Iterable<Quest> {
 		applicationName: string,
 	) {
 		const interval = 20;
-		const streamKey = 'call:1:1'; // Todo: call:channel_id:user_id | guild:guild_id:channel_id:user_id
-		while (!quest.isCompleted()) {
+		const streamKey = 'call:1:1';
+		let iters = 0;
+		const MAX_ITERS = 300;
+		while (!quest.isCompleted() && iters++ < MAX_ITERS) {
+			if (quest.isExpired()) break;
 			const secondsDone =
 				(quest.userStatus?.progress?.[taskName]?.value as number) || 0;
 			const res = await this.client.rest.post(
@@ -493,6 +505,10 @@ export class QuestManager implements Iterable<Quest> {
 			await new Promise((resolve) =>
 				setTimeout(resolve, interval * 1000),
 			);
+		}
+		if (!quest.isCompleted()) {
+			console.warn(`Quest "${questName}" not completed, stopping loop (expired or max iterations).`);
+			return;
 		}
 		const res = await this.client.rest.post(
 			`/quests/${quest.id}/heartbeat`,

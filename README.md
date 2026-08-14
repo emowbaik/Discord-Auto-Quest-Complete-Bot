@@ -1,5 +1,8 @@
 # Discord-Auto-Quest-Complete-Bot
 
+> [!CAUTION]
+> Selfbot via user token violates Discord ToS. Account may be banned. Use at own risk, preferably a throwaway account. Never share your token.
+
 Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` is configured. Runs locally or daily via GitHub Actions.
 
 ## Features
@@ -91,6 +94,7 @@ Works in mobile browsers that allow JavaScript bookmarks.
    ```js
    javascript:(function () { location.reload(); var i = document.createElement("iframe"); document.body.appendChild(i); prompt("Here is your token. Keep it secret", i.contentWindow.localStorage.token.replace(/"/g,""));})();
    ```
+   > Run only on your own account. Clear clipboard after copy.
 3. Open [discord.com/app](https://discord.com/app) and login
 4. Tap address bar, type `Token`, then select bookmark
 5. Popup displays token
@@ -119,7 +123,20 @@ Most mobile browsers do not include DevTools. Use a browser that supports DevToo
 
 ### Step 2 - Configure Optional Auto-Claim
 
-Set `NOPECHA_API_KEY` only if you have a NopeCHA plan that supports Token API. If it is empty or missing, auto-claim is skipped and auto-enroll + auto-complete still run normally.
+Auto-claim is optional. If no captcha provider key is set, auto-claim is skipped and auto-enroll + auto-complete still run.
+
+| Provider | Env | Key format | Auth | Extra |
+|----------|-----|------------|------|-------|
+| **NoneCap** (recommended) | `NONECAP_API_KEY` | `nc_live_…` + 32 chars | `Bearer` | `NONECAP_PROXY` for enterprise IP-bound sitekeys |
+| NopeCHA | `NOPECHA_API_KEY` | provider key | `Basic` | — |
+
+Priority: `NoneCap > NopeCHA` if both set. Optional: `NONECAP_WAIT` (1–90, default 45) controls blocking `?wait` on `POST /v1/solves` and `GET /v1/solves/{id}`.
+
+**NoneCap quickstart**
+
+1. Mint key at `dashboard.nonecap.com` (`nc_live_…`), claim 100 free credits. API base `https://api.nonecap.com/v1`.
+2. Set `NONECAP_API_KEY` in `.env` or GitHub Secrets. For Discord enterprise sitekeys also set `NONECAP_PROXY` to a **sticky** residential proxy — same exit IP you submit the `P1_…` token from. Measured without sticky proxy on Discord enterprise: 6/11 → 0/12 accepted.
+3. Run `npm start`; check logs for `NoneCap API key found` and `Captcha solved, retrying…`.
 
 ### Step 3 - Set Up Telegram Notifications (optional)
 
@@ -140,7 +157,10 @@ Telegram and Discord notifications can run together or independently.
 | Secret | Required | Description |
 |--------|:--------:|-------------|
 | `TOKENS` | Yes | Discord user token(s), one per line for multi-account |
-| `NOPECHA_API_KEY` | Optional | Enables reward claiming when supported by your provider plan |
+| `NONECAP_API_KEY` | Optional | NoneCap Bearer key (`nc_live_…`), preferred for reward claiming |
+| `NONECAP_PROXY` | Optional | Sticky proxy URL for NoneCap enterprise solves (same IP you submit from) |
+| `NONECAP_WAIT` | Optional | Blocking wait in seconds for NoneCap (`1`–`90`, default `45`) |
+| `NOPECHA_API_KEY` | Optional | NopeCHA key, fallback if `NONECAP_API_KEY` not set |
 | `TG_BOT_TOKEN` | Optional | Telegram bot token for result notifications |
 | `TG_CHAT_ID` | Optional | Telegram chat/user ID to receive notifications |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord webhook URL for rich embed notifications |
@@ -268,6 +288,9 @@ Focus of this fork:
 - Telegram and Discord webhook notifications
 - Per-account error isolation
 - Scheduled workflow keepalive
+
+> [!NOTE]
+> Token safety: raw tokens are never logged. Only `@username` or `Account N` appears in logs and notifications.
 
 ## Disclaimer
 

@@ -3,6 +3,7 @@ import { ClientQuest } from './src/client';
 import { canSolveCaptcha } from './src/captcha';
 import { notifyAccountReport } from './src/notify';
 
+// ponytail: never log raw token — only @username / Account N appears in logs
 type AccountRunResult = {
 	account: string;
 	completed: number;
@@ -40,10 +41,8 @@ async function runAccount(token: string, index: number): Promise<AccountRunResul
 					await client.fetchQuests(false);
 					const claimable = client.questManager!.filterQuestsValidToRedeem();
 					console.log(`[Account ${index + 1}] Found ${claimable.length} rewards to claim.`);
-					claimed = claimable.length;
-					for (const quest of claimable) {
-						await client.questManager!.redeemQuest(quest);
-					}
+					const results = await Promise.all(claimable.map((quest) => client.questManager!.redeemQuest(quest)));
+					claimed = results.filter(Boolean).length;
 				} else {
 					console.log('NOPECHA_API_KEY missing. Auto-claim skipped.');
 				}
