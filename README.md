@@ -3,14 +3,14 @@
 > [!CAUTION]
 > Selfbot via user token violates Discord ToS. Account may be banned. Use at own risk, preferably a throwaway account. Never share your token.
 
-Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` is configured. Runs locally or daily via GitHub Actions.
+Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` or `NONECAP_API_KEY` is configured. Runs locally or daily via GitHub Actions.
 
 ## Features
 
 - Auto-enroll: automatically accepts available quests
 - Auto-complete: completes supported quest types without manual interaction
 - Multi-account: process multiple Discord tokens in one run
-- Optional auto-claim: tries to redeem completed rewards only when `NOPECHA_API_KEY` exists
+- Optional auto-claim: tries to redeem completed rewards only when `NOPECHA_API_KEY` or `NONECAP_API_KEY` exists
 - Telegram notifications: per-account completion summary sent to your chat
 - Discord webhook embeds: rich status cards sent to Discord when configured
 - Workflow keepalive: helps prevent scheduled workflow from being auto-disabled due to repository inactivity
