@@ -44,7 +44,7 @@ async function runAccount(token: string, index: number): Promise<AccountRunResul
 					const results = await Promise.all(claimable.map((quest) => client.questManager!.redeemQuest(quest)));
 					claimed = results.filter(Boolean).length;
 				} else {
-					console.log('NOPECHA_API_KEY missing. Auto-claim skipped.');
+					console.log('No captcha provider configured. Auto-claim skipped (set NONECAP_API_KEY or NOPECHA_API_KEY).');
 				}
 
 				resolve({

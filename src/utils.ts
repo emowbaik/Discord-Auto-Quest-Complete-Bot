@@ -5,6 +5,7 @@ import type { ClientQuest } from './client';
 export class Utils extends null {
 	private static buildFetch: Promise<void> | null = null;
 
+	// x-captcha-* forwarded via REST headers — verified preserved by makeHeaders (Headers merge keeps unknown x- headers)
 	public static makeHeaders(init: HeadersInit | undefined) {
 		let myHeaders = new Headers(init);
 		const isAndroidRequest = myHeaders.get('AndroidRequest') === 'true';

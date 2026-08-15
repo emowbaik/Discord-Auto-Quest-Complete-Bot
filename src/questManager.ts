@@ -220,24 +220,27 @@ export class QuestManager implements Iterable<Quest> {
 					].join(':'),
 				}),
 			});
-		try {
-			const res = (await this.client.rest.post(
+		const platform = quest.raw.config.rewards_config.platforms?.[0] ?? 0;
+		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, traffic?: { raw?: string; sealed?: string }) =>
+			this.client.rest.post(
 				`/quests/${quest.id}/claim-reward`,
 				{
 					body: {
-						platform: quest.raw.config.rewards_config.platforms[0],
-						location: 11, // QUEST_HOME_DESKTOP | https://docs.discord.food/resources/quests#quest-content-type
+						platform,
+						location: 11, // QUEST_HOME_DESKTOP
 						is_targeted: false,
 						metadata_raw: null,
 						metadata_sealed: null,
-						traffic_metadata_raw: quest.raw.traffic_metadata_raw,
-						traffic_metadata_sealed:
-							quest.raw.traffic_metadata_sealed,
+						traffic_metadata_raw: traffic?.raw ?? quest.raw.traffic_metadata_raw,
+						traffic_metadata_sealed: traffic?.sealed ?? quest.raw.traffic_metadata_sealed,
 					},
-					headers: captchaHeaders,
-					dispatcher: agent,
+					headers,
+					...(dispatcher ? { dispatcher } : {}),
 				},
-			)) as any;
+			) as Promise<any>;
+
+		try {
+			const res = await doClaim(captchaHeaders, agent);
 			console.log(
 				`Claimed rewards for quest "${quest.config.messages.quest_name}"!`,
 			);
@@ -247,9 +250,18 @@ export class QuestManager implements Iterable<Quest> {
 		} catch (err: any) {
 			const rawError = (err as any)?.rawError as CaptchaDataFromRequest | undefined;
 			if (rawError?.captcha_key?.length && rawError?.captcha_sitekey) {
+				const safeWarn = {
+					captcha_service: rawError.captcha_service,
+					captcha_sitekey: rawError.captcha_sitekey,
+					captcha_session_id: rawError.captcha_session_id,
+					captcha_rqtoken_preview: rawError.captcha_rqtoken ? `${rawError.captcha_rqtoken.slice(0, 12)}…` : undefined,
+					captcha_rqdata_preview: rawError.captcha_rqdata ? `${rawError.captcha_rqdata.slice(0, 16)}…` : undefined,
+					status: (err as any)?.status,
+					code: (err as any)?.code,
+				};
 				console.warn(
 					`Captcha required to redeem rewards for quest "${quest.config.messages.quest_name}".`,
-					rawError,
+					safeWarn,
 				);
 				let solvedCaptchaKey: string;
 				try {
@@ -262,16 +274,62 @@ export class QuestManager implements Iterable<Quest> {
 					return false;
 				}
 				console.log('Captcha solved, retrying reward redemption...');
-				// Todo: Fix "Unknown Message" error when solving captcha for quest rewards claiming.
-				return this.redeemQuest(quest, retry + 1, {
+
+				// Guarded re-fetch: traffic_metadata can go stale between quest completion and claim
+				let freshTraffic: { raw?: string; sealed?: string } | undefined;
+				try {
+					const fresh = await this.client.rest.get(`/quests/${quest.id}`) as any;
+					const cfg = fresh?.config ?? fresh;
+					// API may return top-level or inside config wrapper
+					const raw = fresh?.traffic_metadata_raw ?? cfg?.traffic_metadata_raw ?? quest.raw.traffic_metadata_raw;
+					const sealed = fresh?.traffic_metadata_sealed ?? cfg?.traffic_metadata_sealed ?? quest.raw.traffic_metadata_sealed;
+					if (raw || sealed) freshTraffic = { raw, sealed };
+				} catch {
+					// keep quest.raw
+				}
+
+				const captchaRetryHeaders: Record<string, string> = {
 					'x-captcha-key': solvedCaptchaKey,
 					'x-captcha-rqtoken': rawError['captcha_rqtoken'],
 					'x-captcha-session-id': rawError['captcha_session_id'],
-				});
+					...(rawError.captcha_rqdata ? { 'x-captcha-rqdata': rawError.captcha_rqdata } : {}),
+				};
+				try {
+					const res = await doClaim(captchaRetryHeaders, agent, freshTraffic);
+					console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (after captcha)`);
+					await notifyRewardClaimed(quest.config.messages.quest_name);
+					quest.updateUserStatus(res);
+					return true;
+				} catch (retryErr: any) {
+					const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+					const isUnknownMessage = /Unknown Message/i.test(msg);
+					if (isUnknownMessage && !captchaHeaders) {
+						// Dispatcher/TLS mismatch guard: retry once without custom agent
+						console.warn(`Retry without custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
+						try {
+							const res2 = await doClaim(captchaRetryHeaders, undefined, freshTraffic);
+							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
+							await notifyRewardClaimed(quest.config.messages.quest_name);
+							quest.updateUserStatus(res2);
+							return true;
+						} catch (fallbackErr: any) {
+							console.error(
+								`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha (fallback also failed).`,
+								{ message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code, rawError: JSON.stringify(fallbackErr?.rawError ?? fallbackErr)?.slice(0, 2000) },
+							);
+							return false;
+						}
+					}
+					console.error(
+						`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha.`,
+						{ message: retryErr?.message, status: retryErr?.status, code: retryErr?.code, rawError: JSON.stringify(retryErr?.rawError ?? retryErr)?.slice(0, 2000) },
+					);
+					return false;
+				}
 			} else {
 				console.error(
 					`Failed to redeem rewards for quest "${quest.config.messages.quest_name}".`,
-					err.message,
+					{ message: err?.message, status: err?.status, code: err?.code, rawError: JSON.stringify(err?.rawError ?? err)?.slice(0, 2000) },
 				);
 				return false;
 			}
