@@ -41,8 +41,12 @@ async function runAccount(token: string, index: number): Promise<AccountRunResul
 					await client.fetchQuests(false);
 					const claimable = client.questManager!.filterQuestsValidToRedeem();
 					console.log(`[Account ${index + 1}] Found ${claimable.length} rewards to claim.`);
-					const results = await Promise.all(claimable.map((quest) => client.questManager!.redeemQuest(quest)));
-					claimed = results.filter(Boolean).length;
+					// Sequential: captcha challenges mutate per-quest tokens, parallel causes token cross-talk
+					let claimedResults: boolean[] = [];
+					for (const quest of claimable) {
+						claimedResults.push(await client.questManager!.redeemQuest(quest));
+					}
+					claimed = claimedResults.filter(Boolean).length;
 				} else {
 					console.log('No captcha provider configured. Auto-claim skipped (set NONECAP_API_KEY or NOPECHA_API_KEY).');
 				}
