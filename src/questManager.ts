@@ -281,8 +281,12 @@ export class QuestManager implements Iterable<Quest> {
 					safeWarn,
 				);
 
-				// If we already retried with captcha headers and still get captcha, treat as invalid token and re-solve
-				// Build new headers from current rawError and solve
+				// If already claimed by another race/retry, don't re-solve
+				if (quest.hasClaimedRewards()) {
+					console.log(`Quest "${quest.config.messages.quest_name}" already claimed (skip captcha retry).`);
+					return true;
+				}
+
 				let solvedCaptchaKey: string;
 				try {
 					solvedCaptchaKey = await solveCaptcha(rawError);
