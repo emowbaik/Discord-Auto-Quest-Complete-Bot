@@ -22,11 +22,11 @@ export class NoneCapSolver {
 
 	async hcaptcha(sitekey: string, url: string, rqdata?: string): Promise<string> {
 		const type = rqdata ? 'hcaptcha_enterprise' : 'hcaptcha';
-		const id = await this.createSolve({ type, sitekey, url, rqdata });
-		return this.pollSolve(id);
+		const solve = await this.createSolve({ type, sitekey, url, rqdata });
+		return solve.token ?? this.pollSolve(solve.id);
 	}
 
-	private async createSolve(body: { type: string; sitekey: string; url: string; rqdata?: string }): Promise<string> {
+	private async createSolve(body: { type: string; sitekey: string; url: string; rqdata?: string }): Promise<Solve> {
 		const payload: Record<string, unknown> = {
 			type: body.type,
 			sitekey: body.sitekey,
@@ -44,12 +44,13 @@ export class NoneCapSolver {
 		// 200 terminal, 202 pending/solving — both return a Solve object when structurally valid
 		if ((response.status === 200 || response.status === 202) && json.id) {
 			const solve = json as Solve;
-			if (solve.status === 'solved' && solve.token) return solve.token;
+			if (solve.status === 'solved' && !solve.token) {
+				throw new Error('NoneCap solved response is missing its token');
+			}
 			if (solve.status === 'failed' || solve.status === 'expired' || solve.status === 'cancelled') {
 				throw new Error(`NoneCap solve ${solve.status}: ${solve.error?.code ?? 'unknown'} ${solve.error?.message ?? ''}`.trim());
 			}
-			// pending/solving -> poll
-			return solve.id;
+			return solve;
 		}
 
 		const err = (json as Envelope<Solve>).error;
