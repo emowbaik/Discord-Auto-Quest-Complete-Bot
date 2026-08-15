@@ -132,7 +132,7 @@ Auto-claim is optional. If no captcha provider key is set, auto-claim is skipped
 | **NoneCap** (recommended) | `NONECAP_API_KEY` | `nc_live_…` + 32 chars | `Bearer` | `NONECAP_PROXY` for enterprise IP-bound sitekeys |
 | NopeCHA | `NOPECHA_API_KEY` | provider key | `Basic` | — |
 
-Priority: `NoneCap > NopeCHA` if both set. Optional: `NONECAP_WAIT` (1–90, default 45) controls blocking `?wait` on `POST /v1/solves` and `GET /v1/solves/{id}`.
+Priority: `NoneCap > NopeCHA` if both set; otherwise the available pool is used. All keys are tried sequentially within a pool, with round-robin start. Optional: `NONECAP_WAIT` (1–90, default 45) controls blocking `?wait` on `POST /v1/solves` and `GET /v1/solves/{id}`.
 
 **NoneCap quickstart**
 
@@ -159,10 +159,10 @@ Telegram and Discord notifications can run together or independently.
 | Secret | Required | Description |
 |--------|:--------:|-------------|
 | `TOKENS` | Yes | Discord user token(s), one per line for multi-account |
-| `NONECAP_API_KEY` | Optional | NoneCap Bearer key (`nc_live_…`), preferred for reward claiming |
-| `NONECAP_PROXY` | Optional | Sticky proxy URL for NoneCap enterprise solves (same IP you submit from) |
+| `NONECAP_API_KEY` | Optional | NoneCap Bearer key(s) (`nc_live_…`). Multiple keys: comma or newline separated. Pool tried in order with round-robin. Preferred for reward claiming |
+| `NONECAP_PROXY` | Optional | Sticky proxy URL(s) for NoneCap enterprise solves (same IP you submit from). With multiple keys, set matching proxies in same order separated by comma/newline, or one proxy reused for all |
 | `NONECAP_WAIT` | Optional | Blocking wait in seconds for NoneCap (`1`–`90`, default `45`) |
-| `NOPECHA_API_KEY` | Optional | NopeCHA key, fallback if `NONECAP_API_KEY` not set |
+| `NOPECHA_API_KEY` | Optional | NopeCHA key(s) (comma/newline separated). Falls back if all `NONECAP_API_KEY` keys fail |
 | `TG_BOT_TOKEN` | Optional | Telegram bot token for result notifications |
 | `TG_CHAT_ID` | Optional | Telegram chat/user ID to receive notifications |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord webhook URL for rich embed notifications |
