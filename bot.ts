@@ -48,7 +48,7 @@ async function runAccount(token: string, index: number): Promise<AccountRunResul
 					}
 					claimed = claimedResults.filter(Boolean).length;
 				} else {
-					console.log('No captcha provider configured. Auto-claim skipped (set NONECAP_API_KEY or NOPECHA_API_KEY).');
+					console.log('No captcha provider configured. Auto-claim skipped (set NOPECHA_API_KEY).');
 				}
 
 				resolve({

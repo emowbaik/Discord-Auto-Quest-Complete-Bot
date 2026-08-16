@@ -3,7 +3,7 @@
 > [!CAUTION]
 > Selfbot via user token violates Discord ToS. Account may be banned. Use at own risk, preferably a throwaway account. Never share your token.
 
-Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` or `NONECAP_API_KEY` is configured. Runs locally or daily via GitHub Actions.
+Automated Discord quest completion selfbot: auto-enroll and auto-complete supported quests, with optional auto-claim when `NOPECHA_API_KEY` is configured. Runs locally or daily via GitHub Actions.
 
 ![Repository architecture infographic](assets/repo_infographic.svg)
 
@@ -12,7 +12,7 @@ Automated Discord quest completion selfbot: auto-enroll and auto-complete suppor
 - Auto-enroll: automatically accepts available quests
 - Auto-complete: completes supported quest types without manual interaction
 - Multi-account: process multiple Discord tokens in one run
-- Optional auto-claim: tries to redeem completed rewards only when `NOPECHA_API_KEY` or `NONECAP_API_KEY` exists
+- Optional auto-claim: tries to redeem completed rewards only when `NOPECHA_API_KEY` exists
 - Telegram notifications: per-account completion summary sent to your chat
 - Discord webhook embeds: rich status cards sent to Discord when configured
 - Workflow keepalive: helps prevent scheduled workflow from being auto-disabled due to repository inactivity
@@ -127,18 +127,7 @@ Most mobile browsers do not include DevTools. Use a browser that supports DevToo
 
 Auto-claim is optional. If no captcha provider key is set, auto-claim is skipped and auto-enroll + auto-complete still run.
 
-| Provider | Env | Key format | Auth | Extra |
-|----------|-----|------------|------|-------|
-| **NoneCap** (recommended) | `NONECAP_API_KEY` | `nc_live_…` + 32 chars | `Bearer` | `NONECAP_PROXY` for enterprise IP-bound sitekeys |
-| NopeCHA | `NOPECHA_API_KEY` | provider key | `Basic` | — |
-
-Priority: `NoneCap > NopeCHA` if both set; otherwise the available pool is used. All keys are tried sequentially within a pool, with round-robin start. Optional: `NONECAP_WAIT` (1–90, default 45) controls blocking `?wait` on `POST /v1/solves` and `GET /v1/solves/{id}`.
-
-**NoneCap quickstart**
-
-1. Mint key at `dashboard.nonecap.com` (`nc_live_…`), claim 100 free credits. API base `https://api.nonecap.com/v1`.
-2. Set `NONECAP_API_KEY` in `.env` or GitHub Secrets. For Discord enterprise sitekeys also set `NONECAP_PROXY` to a **sticky** residential proxy — same exit IP you submit the `P1_…` token from. Measured without sticky proxy on Discord enterprise: 6/11 → 0/12 accepted.
-3. Run `npm start`; check logs for `NoneCap API key found` and `Captcha solved, retrying…`.
+Set `NOPECHA_API_KEY` in `.env` or GitHub Secrets (multiple keys: comma or newline separated, round-robin with fallback). Run `npm start` and check logs for `NopeCHA API key found` and `Captcha solved, retrying…`.
 
 ### Step 3 - Set Up Telegram Notifications (optional)
 
@@ -159,10 +148,7 @@ Telegram and Discord notifications can run together or independently.
 | Secret | Required | Description |
 |--------|:--------:|-------------|
 | `TOKENS` | Yes | Discord user token(s), one per line for multi-account |
-| `NONECAP_API_KEY` | Optional | NoneCap Bearer key(s) (`nc_live_…`). Multiple keys: comma or newline separated. Pool tried in order with round-robin. Preferred for reward claiming |
-| `NONECAP_PROXY` | Optional | Sticky proxy URL(s) for NoneCap enterprise solves (same IP you submit from). With multiple keys, set matching proxies in same order separated by comma/newline, or one proxy reused for all |
-| `NONECAP_WAIT` | Optional | Blocking wait in seconds for NoneCap (`1`–`90`, default `45`) |
-| `NOPECHA_API_KEY` | Optional | NopeCHA key(s) (comma/newline separated). Falls back if all `NONECAP_API_KEY` keys fail |
+| `NOPECHA_API_KEY` | Optional | NopeCHA key(s) (comma/newline separated, round-robin with fallback) for reward claiming |
 | `TG_BOT_TOKEN` | Optional | Telegram bot token for result notifications |
 | `TG_CHAT_ID` | Optional | Telegram chat/user ID to receive notifications |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord webhook URL for rich embed notifications |
