@@ -1,4 +1,4 @@
-﻿import { fetch } from 'undici';
+import { fetch } from 'undici';
 import { Constants } from '../constants';
 
 export class NopeCHASolver {
@@ -22,9 +22,15 @@ export class NopeCHASolver {
 				...(rqdata ? { data: { rqdata } } : {}),
 			}),
 		});
-		const json = (await response.json()) as { data?: string; error?: string; message?: string };
+		const json = (await response.json()) as { data?: string; error?: number; message?: string; code?: number; type?: string };
 		if (!response.ok || !json.data) {
-			throw new Error(`NopeCHA submit failed: ${JSON.stringify(json)}`);
+			const code = (json as any).error ?? (json as any).code;
+			const raw = JSON.stringify(json);
+			// error 18 = Feature unavailable for current plan — Reviewer/free cannot use Token API (enterprise hcaptcha with rqdata)
+			if (code === 18 || raw.includes('Feature unavailable')) {
+				throw new Error(`NopeCHA plan blocked Token API (error 18): Reviewer/free tier tidak bisa solve enterprise hcaptcha via /v1/token — upgrade ke paid plan atau pakai extension/recognition flow. Raw: ${raw}`);
+			}
+			throw new Error(`NopeCHA submit failed: ${raw}`);
 		}
 		return json.data;
 	}
