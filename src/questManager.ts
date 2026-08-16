@@ -220,35 +220,42 @@ export class QuestManager implements Iterable<Quest> {
 					].join(':'),
 				}),
 			});
-		const platform = quest.raw.config.rewards_config.platforms?.[0] ?? 0;
-		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, traffic?: { raw?: string; sealed?: string }) =>
+		// ponytail: questku minimal body (sealed only) — add raw/metadata_raw when 10008 persists
+		const resolveSealed = (): string | null =>
+			(quest.raw as any).traffic_metadata_sealed
+			?? (quest.raw as any).config?.traffic_metadata_sealed
+			?? (quest.config as any)?.traffic_metadata_sealed
+			?? null;
+		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, sealedOverride?: string | null) =>
 			this.client.rest.post(
 				`/quests/${quest.id}/claim-reward`,
 				{
 					body: {
-						platform,
-						location: 11, // QUEST_HOME_DESKTOP
+						platform: 0,
+						location: 11, // QUEST_HOME_DESKTOP — matches questku
 						is_targeted: false,
-						metadata_raw: null,
 						metadata_sealed: null,
-						traffic_metadata_raw: traffic?.raw ?? quest.raw.traffic_metadata_raw,
-						traffic_metadata_sealed: traffic?.sealed ?? quest.raw.traffic_metadata_sealed,
+						traffic_metadata_sealed: sealedOverride !== undefined ? sealedOverride : resolveSealed(),
 					},
 					headers,
 					...(dispatcher ? { dispatcher } : {}),
 				},
 			) as Promise<any>;
 
-		const fetchFreshTraffic = async (): Promise<{ raw?: string; sealed?: string } | undefined> => {
+		const fetchFreshTraffic = async (): Promise<string | null | undefined> => {
 			try {
 				const fresh = await this.client.rest.get(`/quests/${quest.id}`) as any;
 				const cfg = fresh?.config ?? fresh;
-				const raw = fresh?.traffic_metadata_raw ?? cfg?.traffic_metadata_raw ?? quest.raw.traffic_metadata_raw;
-				const sealed = fresh?.traffic_metadata_sealed ?? cfg?.traffic_metadata_sealed ?? quest.raw.traffic_metadata_sealed;
-				if (raw || sealed) return { raw, sealed };
+				const sealed = fresh?.traffic_metadata_sealed ?? cfg?.traffic_metadata_sealed ?? resolveSealed();
+				if (sealed) return sealed;
+				// explicitly null if server has none (questku sends null)
+				if (fresh?.traffic_metadata_sealed === null || cfg?.traffic_metadata_sealed === null) return null;
 			} catch {}
 			return undefined;
 		};
+
+		const isAlreadyClaimed = (err: any): boolean =>
+			err?.status === 409 || err?.code === 40010 || /already claimed/i.test(JSON.stringify(err?.rawError ?? err?.message ?? ''));
 
 		const isUnknownMessage = (err: any): boolean => {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -256,14 +263,19 @@ export class QuestManager implements Iterable<Quest> {
 			return /Unknown Message/i.test(msg) || /Unknown Message/i.test(raw) || /10007/.test(raw);
 		};
 
-		try {
-			const res = await doClaim(captchaHeaders, agent);
+		const handleSuccess = async (res: any) => {
 			console.log(
 				`Claimed rewards for quest "${quest.config.messages.quest_name}"!`,
 			);
 			await notifyRewardClaimed(quest.config.messages.quest_name);
-			quest.updateUserStatus(res);
+			quest.updateUserStatus(res ?? { claimed_at: new Date().toISOString() } as any);
 			return true;
+		};
+
+		try {
+			// questku: no custom TLS/dispatcher — browser fetch TLS. Try plain first.
+			const res = await doClaim(captchaHeaders, undefined);
+			return await handleSuccess(res);
 		} catch (err: any) {
 			const rawError = (err as any)?.rawError as CaptchaDataFromRequest | undefined;
 			if (rawError?.captcha_key?.length && rawError?.captcha_sitekey) {
@@ -307,9 +319,9 @@ export class QuestManager implements Iterable<Quest> {
 					...(rawError.captcha_rqdata ? { 'x-captcha-rqdata': rawError.captcha_rqdata } : {}),
 				};
 
-				// Attempt 1: with custom agent
+				// Attempt 1: plain dispatcher (questku style) + fresh sealed
 				try {
-					const res = await doClaim(captchaRetryHeaders, agent, freshTraffic);
+					const res = await doClaim(captchaRetryHeaders, undefined, freshTraffic);
 					console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (after captcha)`);
 					await notifyRewardClaimed(quest.config.messages.quest_name);
 					quest.updateUserStatus(res);
@@ -342,10 +354,15 @@ export class QuestManager implements Iterable<Quest> {
 						}
 					}
 
+				if (isAlreadyClaimed(retryErr)) {
+						console.log(`Quest "${quest.config.messages.quest_name}" already claimed (409).`);
+						quest.updateUserStatus({ claimed_at: new Date().toISOString() } as any);
+						return true;
+					}
 					if (isUnknownMessage(retryErr)) {
-						console.warn(`Retry without custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
+						console.warn(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
 						try {
-							const res2 = await doClaim(captchaRetryHeaders, undefined, freshTraffic);
+							const res2 = await doClaim(captchaRetryHeaders, agent, freshTraffic);
 							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
 							await notifyRewardClaimed(quest.config.messages.quest_name);
 							quest.updateUserStatus(res2);
@@ -381,11 +398,16 @@ export class QuestManager implements Iterable<Quest> {
 					return false;
 				}
 			} else {
+				if (isAlreadyClaimed(err)) {
+					console.log(`Quest "${quest.config.messages.quest_name}" already claimed (409).`);
+					quest.updateUserStatus({ claimed_at: new Date().toISOString() } as any);
+					return true;
+				}
 				// Non-captcha failure — check Unknown Message fallback for initial claim without captcha
 				if (isUnknownMessage(err) && !captchaHeaders) {
-					console.warn(`Retry without custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
+					console.warn(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
 					try {
-						const res2 = await doClaim(captchaHeaders, undefined);
+						const res2 = await doClaim(captchaHeaders, agent);
 						console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
 						await notifyRewardClaimed(quest.config.messages.quest_name);
 						quest.updateUserStatus(res2);

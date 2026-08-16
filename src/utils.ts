@@ -38,7 +38,7 @@ export class Utils extends null {
 		myHeaders.append('User-Agent', Constants.USER_AGENT);
 		if (withOriginAndReferer) {
 			myHeaders.append('origin', 'https://discord.com');
-			myHeaders.append('referer', 'https://discord.com/channels/@me');
+			myHeaders.append('referer', 'https://discord.com/quest-home');
 		}
 		myHeaders.append('pragma', 'no-cache');
 		myHeaders.append('priority', 'u=1, i');
