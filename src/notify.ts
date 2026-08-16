@@ -35,6 +35,12 @@ function warnOnceIfNoNotify(): void {
 	}
 }
 
+export function debugToTelegram(message: string, isWarn = false): void {
+	if (isWarn) console.warn(message);
+	else console.log(message);
+	void sendTelegram(`${isWarn ? '⚠️ ' : ''}<code>${escapeHtml(message)}</code>`);
+}
+
 function escapeHtml(value: string): string {
 	return value
 		.replace(/&/g, '&amp;')

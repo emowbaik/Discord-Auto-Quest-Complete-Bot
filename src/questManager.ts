@@ -8,7 +8,7 @@ import type {
 } from './interface';
 import { Quest } from './quest';
 import { Utils } from './utils';
-import { notifyRewardClaimed } from './notify';
+import { notifyRewardClaimed, debugToTelegram } from './notify';
 import { buildConnector, Client } from 'undici';
 
 export class QuestManager implements Iterable<Quest> {
@@ -227,9 +227,9 @@ export class QuestManager implements Iterable<Quest> {
 			?? (quest.config as any)?.traffic_metadata_sealed
 			?? null;
 		const sealedInitial = resolveSealed();
-		console.log(`[debug] claim "${quest.config.messages.quest_name}" id=${quest.id} sealed=${sealedInitial ? `${String(sealedInitial).slice(0,16)}… len=${String(sealedInitial).length}` : 'null'} completed=${quest.isCompleted()} claimed=${quest.hasClaimedRewards()} retry=${retry} hasCaptchaHeaders=${Boolean(captchaHeaders)}`);
+		debugToTelegram(`[debug] claim "${quest.config.messages.quest_name}" id=${quest.id} sealed=${sealedInitial ? `${String(sealedInitial).slice(0,16)}… len=${String(sealedInitial).length}` : 'null'} completed=${quest.isCompleted()} claimed=${quest.hasClaimedRewards()} retry=${retry} hasCaptchaHeaders=${Boolean(captchaHeaders)}`);
 		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, sealedOverride?: string | null) => {
-			if (headers) console.log(`[debug] doClaim headers: ${Object.keys(headers).join(',')} sealed=${String(sealedOverride !== undefined ? sealedOverride : sealedInitial ?? 'null').slice(0,16)}…`);
+			if (headers) debugToTelegram(`[debug] doClaim headers: ${Object.keys(headers).join(',')} sealed=${String(sealedOverride !== undefined ? sealedOverride : sealedInitial ?? 'null').slice(0,16)}…`);
 			return this.client.rest.post(
 				`/quests/${quest.id}/claim-reward`,
 				{
@@ -255,17 +255,17 @@ export class QuestManager implements Iterable<Quest> {
 					const found = list.find((q: any) => q.id === quest.id);
 					if (found) {
 						const sealed = found?.traffic_metadata_sealed ?? found?.config?.traffic_metadata_sealed ?? resolveSealed();
-						if (sealed) { console.log(`[debug] fresh sealed from @me: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
+						if (sealed) { debugToTelegram(`[debug] fresh sealed from @me: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
 						if (found?.traffic_metadata_sealed === null || found?.config?.traffic_metadata_sealed === null) return null;
 					}
-				} catch (e: any) { console.warn(`[debug] @me fetch failed: ${e?.message ?? String(e)}`); }
+				} catch (e: any) { debugToTelegram(`[debug] @me fetch failed: ${e?.message ?? String(e)}`, true); }
 				const fresh = await this.client.rest.get(`/quests/${quest.id}`) as any;
 				const cfg = fresh?.config ?? fresh;
 				const sealed = fresh?.traffic_metadata_sealed ?? cfg?.traffic_metadata_sealed ?? resolveSealed();
-				if (sealed) { console.log(`[debug] fresh sealed from /quests/${quest.id}: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
+				if (sealed) { debugToTelegram(`[debug] fresh sealed from /quests/${quest.id}: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
 				if (fresh?.traffic_metadata_sealed === null || cfg?.traffic_metadata_sealed === null) return null;
-			} catch (e: any) { console.warn(`[debug] fresh fetch failed: ${e?.message ?? String(e)}`); }
-			console.log(`[debug] fresh sealed fallback to resolveSealed: ${String(resolveSealed() ?? 'null').slice(0, 16)}…`);
+			} catch (e: any) { debugToTelegram(`[debug] fresh fetch failed: ${e?.message ?? String(e)}`, true); }
+			debugToTelegram(`[debug] fresh sealed fallback to resolveSealed: ${String(resolveSealed() ?? 'null').slice(0, 16)}…`);
 			return undefined;
 		};
 
@@ -316,10 +316,9 @@ export class QuestManager implements Iterable<Quest> {
 					status: (err as any)?.status,
 					code: (err as any)?.code,
 				};
-				console.warn(
-					`Captcha required to redeem rewards for quest "${quest.config.messages.quest_name}".`,
-					safeWarn,
-				);
+				// ponytail: keep console.warn for GH Actions; also mirror to TG for scheduled runs without log tail
+				const capMsg = `Captcha required to redeem rewards for quest "${quest.config.messages.quest_name}". ${JSON.stringify(safeWarn)}`;
+				debugToTelegram(capMsg, true);
 
 				// If already claimed by another race/retry, don't re-solve
 				if (quest.hasClaimedRewards()) {
@@ -331,13 +330,13 @@ export class QuestManager implements Iterable<Quest> {
 				try {
 					solvedCaptchaKey = await solveCaptcha(rawError);
 				} catch (captchaError) {
-					console.error(
-						`Captcha solver failed for quest "${quest.config.messages.quest_name}". Skipping reward claim.`,
-						captchaError instanceof Error ? captchaError.message : String(captchaError),
-					);
+					const msg = `Captcha solver failed for quest "${quest.config.messages.quest_name}". ${captchaError instanceof Error ? captchaError.message : String(captchaError)}`;
+					debugToTelegram(msg, true);
+					console.error(msg, captchaError instanceof Error ? captchaError.message : String(captchaError));
 					return false;
 				}
 				console.log('Captcha solved, retrying reward redemption...');
+				debugToTelegram('Captcha solved, retrying reward redemption...');
 
 				const freshTraffic = await fetchFreshTraffic();
 				const captchaRetryHeaders: Record<string, string> = {
@@ -388,7 +387,7 @@ export class QuestManager implements Iterable<Quest> {
 						return true;
 					}
 					if (isUnknownMessage(retryErr)) {
-						console.warn(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
+						debugToTelegram(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`, true);
 						try {
 							const res2 = await doClaim(captchaRetryHeaders, agent, freshTraffic);
 							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
@@ -399,7 +398,7 @@ export class QuestManager implements Iterable<Quest> {
 							const fbRaw = (fallbackErr as any)?.rawError;
 							const fbIsCaptcha = Boolean(fbRaw?.captcha_key?.length && fbRaw?.captcha_sitekey);
 							if (fbIsCaptcha && retry < 2) {
-								console.warn(`Fallback also returned captcha challenge, re-solving…`);
+								debugToTelegram(`Fallback also returned captcha challenge, re-solving…`, true);
 								try {
 									const fbSolved = await solveCaptcha(fbRaw as CaptchaDataFromRequest);
 									const fbHeaders: Record<string, string> = {
@@ -433,6 +432,7 @@ export class QuestManager implements Iterable<Quest> {
 								`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha (fallback also failed).`,
 								{ message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code, rawError: JSON.stringify(fallbackErr?.rawError ?? fallbackErr)?.slice(0, 2000) },
 							);
+							debugToTelegram(`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha (fallback also failed). ${JSON.stringify({ message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code }).slice(0, 500)}`, true);
 							return false;
 						}
 					}
@@ -440,6 +440,7 @@ export class QuestManager implements Iterable<Quest> {
 						`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha.`,
 						{ message: retryErr?.message, status: retryErr?.status, code: retryErr?.code, rawError: JSON.stringify(retryErr?.rawError ?? retryErr)?.slice(0, 2000) },
 					);
+					debugToTelegram(`Failed to redeem rewards for quest "${quest.config.messages.quest_name}" after captcha. ${JSON.stringify({ message: retryErr?.message, status: retryErr?.status, code: retryErr?.code }).slice(0, 500)}`, true);
 					return false;
 				}
 			} else {
@@ -448,27 +449,46 @@ export class QuestManager implements Iterable<Quest> {
 					quest.updateUserStatus({ claimed_at: new Date().toISOString() } as any);
 					return true;
 				}
-				// Non-captcha failure — check Unknown Message fallback for initial claim without captcha
-				if (isUnknownMessage(err) && !captchaHeaders) {
-					console.warn(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`);
-					try {
-						const res2 = await doClaim(captchaHeaders, agent);
-						console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
-						await notifyRewardClaimed(quest.config.messages.quest_name);
-						quest.updateUserStatus(res2);
-						return true;
-					} catch (fallbackErr: any) {
-						console.error(
-							`Failed to redeem rewards for quest "${quest.config.messages.quest_name}".`,
-							{ message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code, rawError: JSON.stringify(fallbackErr?.rawError ?? fallbackErr)?.slice(0, 2000) },
-						);
-						return false;
+				// ponytail: 10008 on captcha retry was previously swallowed — now try alt bodies / dispatcher even with captcha headers
+				if (isUnknownMessage(err)) {
+					// If we already have captcha headers, try alt bodies before giving up
+					if (captchaHeaders) {
+						debugToTelegram(`[debug] Unknown Message with captcha headers for "${quest.config.messages.quest_name}" — trying alt bodies…`, true);
+						try {
+							const alt = await tryAlternativeBodies(captchaHeaders, undefined);
+							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (alt body after captcha retry)`);
+							await notifyRewardClaimed(quest.config.messages.quest_name);
+							quest.updateUserStatus(alt);
+							return true;
+						} catch {}
+						try {
+							const alt2 = await tryAlternativeBodies(captchaHeaders, agent);
+							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (alt body + dispatcher after captcha retry)`);
+							await notifyRewardClaimed(quest.config.messages.quest_name);
+							quest.updateUserStatus(alt2);
+							return true;
+						} catch {}
+					}
+					// Also try dispatcher fallback for initial claim without captcha
+					if (!captchaHeaders) {
+						debugToTelegram(`Retry with custom dispatcher for "${quest.config.messages.quest_name}" (Unknown Message fallback)…`, true);
+						try {
+							const res2 = await doClaim(captchaHeaders, agent);
+							console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (fallback dispatcher)`);
+							await notifyRewardClaimed(quest.config.messages.quest_name);
+							quest.updateUserStatus(res2);
+							return true;
+						} catch (fallbackErr: any) {
+							const fmsg = `Failed to redeem rewards for quest "${quest.config.messages.quest_name}". ${JSON.stringify({ message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code }).slice(0, 500)}`;
+							console.error(fmsg, { message: fallbackErr?.message, status: fallbackErr?.status, code: fallbackErr?.code, rawError: JSON.stringify(fallbackErr?.rawError ?? fallbackErr)?.slice(0, 2000) });
+							debugToTelegram(fmsg, true);
+							return false;
+						}
 					}
 				}
-				console.error(
-					`Failed to redeem rewards for quest "${quest.config.messages.quest_name}".`,
-					{ message: err?.message, status: err?.status, code: err?.code, rawError: JSON.stringify(err?.rawError ?? err)?.slice(0, 2000) },
-				);
+				const fmsg = `Failed to redeem rewards for quest "${quest.config.messages.quest_name}". ${JSON.stringify({ message: err?.message, status: err?.status, code: err?.code }).slice(0, 500)}`;
+				console.error(fmsg, { message: err?.message, status: err?.status, code: err?.code, rawError: JSON.stringify(err?.rawError ?? err)?.slice(0, 2000) });
+				debugToTelegram(fmsg, true);
 				return false;
 			}
 		} finally {
