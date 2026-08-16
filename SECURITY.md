@@ -1,8 +1,9 @@
 # Security Audit — Discord-Auto-Quest-Complete-Bot
 
-**Date:** 2026-08-14
+**Date:** 2026-08-16 (re-audited after NoneCap removal)
 **Scope:** `bot.ts`, `src/**`, `package.json`, `.env.example`, `.gitignore`, `.github/workflows/auto.yml`
 **Method:** Paranoid OWASP Top 10 sweep — secrets scan, injection/XSS, auth, dependency supply-chain
+**Delta since 2026-08-14:** removed `src/providers/nonecap.ts`, `tests/nonecap.test.ts`, `NONECAP_*` env (1310506); added `CODE_DOCUMENTATION.md`, `DESIGN_PHILOSOPHY.md`
 
 ---
 
@@ -56,7 +57,7 @@
 
 ### 🟢 Passed
 
-- **Secrets hygiene:** All credentials (`TOKENS`, `NOPECHA_API_KEY`, `TG_BOT_TOKEN`, `TG_CHAT_ID`, `DISCORD_WEBHOOK_URL`) read via `process.env` / GitHub Secrets. No `grep` hit for hardcoded `API_KEY`, `password`, `secret`, `token` literals. `git status` shows `.env` is untracked/ignored (not staged).
+- **Secrets hygiene:** All credentials (`TOKENS`, `NOPECHA_API_KEY`, `TG_BOT_TOKEN`, `TG_CHAT_ID`, `DISCORD_WEBHOOK_URL`) read via `process.env` / GitHub Secrets. No `NONECAP_*` remains (removed 1310506). No `grep` hit for hardcoded `API_KEY`, `password`, `secret`, `token` literals. `git status` shows `.env` is untracked/ignored (not staged).
 - **Injection:** No `innerHTML`, `dangerouslySetInnerHTML`, `eval`, `exec`, `child_process`.
 - **Rate limiting:** `REST` `rateLimited` event is logged; heartbeat/video loops sleep 7–20s between calls.
 - **Data protection:** All outbound fetches are HTTPS (`https://discord.com`, `https://api.telegram.org`, `https://discord.com/api/webhooks`, `https://*.discordsays.com`). No stack traces leaked to Telegram/Discord — `console.error` stays local.
