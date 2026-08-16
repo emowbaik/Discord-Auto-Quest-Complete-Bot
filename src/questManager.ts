@@ -226,8 +226,11 @@ export class QuestManager implements Iterable<Quest> {
 			?? (quest.raw as any).config?.traffic_metadata_sealed
 			?? (quest.config as any)?.traffic_metadata_sealed
 			?? null;
-		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, sealedOverride?: string | null) =>
-			this.client.rest.post(
+		const sealedInitial = resolveSealed();
+		console.log(`[debug] claim "${quest.config.messages.quest_name}" id=${quest.id} sealed=${sealedInitial ? `${String(sealedInitial).slice(0,16)}… len=${String(sealedInitial).length}` : 'null'} completed=${quest.isCompleted()} claimed=${quest.hasClaimedRewards()} retry=${retry} hasCaptchaHeaders=${Boolean(captchaHeaders)}`);
+		const doClaim = (headers?: Record<string, string>, dispatcher?: Client, sealedOverride?: string | null) => {
+			if (headers) console.log(`[debug] doClaim headers: ${Object.keys(headers).join(',')} sealed=${String(sealedOverride !== undefined ? sealedOverride : sealedInitial ?? 'null').slice(0,16)}…`);
+			return this.client.rest.post(
 				`/quests/${quest.id}/claim-reward`,
 				{
 					body: {
@@ -235,22 +238,34 @@ export class QuestManager implements Iterable<Quest> {
 						location: 11, // QUEST_HOME_DESKTOP — matches questku
 						is_targeted: false,
 						metadata_sealed: null,
-						traffic_metadata_sealed: sealedOverride !== undefined ? sealedOverride : resolveSealed(),
+						traffic_metadata_sealed: sealedOverride !== undefined ? sealedOverride : sealedInitial,
 					},
 					headers,
 					...(dispatcher ? { dispatcher } : {}),
 				},
 			) as Promise<any>;
+		};
 
 		const fetchFreshTraffic = async (): Promise<string | null | undefined> => {
 			try {
+				// primary: re-read from /quests/@me list (canonical source); fallback: /quests/:id config
+				try {
+					const all = await this.client.rest.get(`/quests/@me`) as any;
+					const list: any[] = all?.quests ?? [];
+					const found = list.find((q: any) => q.id === quest.id);
+					if (found) {
+						const sealed = found?.traffic_metadata_sealed ?? found?.config?.traffic_metadata_sealed ?? resolveSealed();
+						if (sealed) { console.log(`[debug] fresh sealed from @me: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
+						if (found?.traffic_metadata_sealed === null || found?.config?.traffic_metadata_sealed === null) return null;
+					}
+				} catch (e: any) { console.warn(`[debug] @me fetch failed: ${e?.message ?? String(e)}`); }
 				const fresh = await this.client.rest.get(`/quests/${quest.id}`) as any;
 				const cfg = fresh?.config ?? fresh;
 				const sealed = fresh?.traffic_metadata_sealed ?? cfg?.traffic_metadata_sealed ?? resolveSealed();
-				if (sealed) return sealed;
-				// explicitly null if server has none (questku sends null)
+				if (sealed) { console.log(`[debug] fresh sealed from /quests/${quest.id}: ${String(sealed).slice(0, 16)}… len=${String(sealed).length}`); return sealed; }
 				if (fresh?.traffic_metadata_sealed === null || cfg?.traffic_metadata_sealed === null) return null;
-			} catch {}
+			} catch (e: any) { console.warn(`[debug] fresh fetch failed: ${e?.message ?? String(e)}`); }
+			console.log(`[debug] fresh sealed fallback to resolveSealed: ${String(resolveSealed() ?? 'null').slice(0, 16)}…`);
 			return undefined;
 		};
 
