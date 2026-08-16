@@ -260,7 +260,20 @@ export class QuestManager implements Iterable<Quest> {
 		const isUnknownMessage = (err: any): boolean => {
 			const msg = err instanceof Error ? err.message : String(err);
 			const raw = JSON.stringify(err?.rawError ?? '');
-			return /Unknown Message/i.test(msg) || /Unknown Message/i.test(raw) || /10007/.test(raw);
+			return /Unknown Message/i.test(msg) || /Unknown Message/i.test(raw) || /10007/.test(raw) || /10008/.test(raw);
+		};
+
+		// 10008 can mean stale sealed OR payload shape — try progressively more complete bodies
+		const tryAlternativeBodies = async (headers?: Record<string, string>, dispatcher?: Client): Promise<any> => {
+			// variant A: omit sealed entirely (some quests have none)
+			try { return await this.client.rest.post(`/quests/${quest.id}/claim-reward`, { body: { platform: 0, location: 11, is_targeted: false, metadata_sealed: null, traffic_metadata_sealed: null }, headers, ...(dispatcher ? { dispatcher } : {}) }) as Promise<any>; } catch {}
+			// variant B: include raw if we have it (upstream uses both)
+			const raw = (quest.raw as any).traffic_metadata_raw ?? null;
+			const sealed = resolveSealed();
+			if (raw) {
+				try { return await this.client.rest.post(`/quests/${quest.id}/claim-reward`, { body: { platform: 0, location: 11, is_targeted: false, metadata_sealed: null, traffic_metadata_raw: raw, traffic_metadata_sealed: sealed }, headers, ...(dispatcher ? { dispatcher } : {}) }) as Promise<any>; } catch {}
+			}
+			throw new Error('Unknown Message');
 		};
 
 		const handleSuccess = async (res: any) => {
@@ -382,6 +395,23 @@ export class QuestManager implements Iterable<Quest> {
 									};
 									try { agent.close(); } catch {}
 									return this.redeemQuest(quest, retry + 1, fbHeaders);
+								} catch {}
+							}
+							// ponytail: stale sealed vs body shape — try null sealed + raw variants before giving up
+							if (isUnknownMessage(fallbackErr)) {
+								try {
+									const alt = await tryAlternativeBodies(captchaRetryHeaders, undefined);
+									console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (alt body)`);
+									await notifyRewardClaimed(quest.config.messages.quest_name);
+									quest.updateUserStatus(alt);
+									return true;
+								} catch {}
+								try {
+									const alt2 = await tryAlternativeBodies(captchaRetryHeaders, agent);
+									console.log(`Claimed rewards for quest "${quest.config.messages.quest_name}"! (alt body + dispatcher)`);
+									await notifyRewardClaimed(quest.config.messages.quest_name);
+									quest.updateUserStatus(alt2);
+									return true;
 								} catch {}
 							}
 							console.error(
