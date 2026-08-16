@@ -1,5 +1,6 @@
 import { CaptchaDataFromRequest } from './interface';
 import { NopeCHASolver } from './providers/nopecha';
+import { NopeCHARecognitionSolver, type HCaptchaTask, type HCaptchaRecognitionResult } from './providers/nopechaRecognition';
 
 function parseList(value: string | undefined): string[] {
 	if (!value) return [];
@@ -13,11 +14,15 @@ function parseList(value: string | undefined): string[] {
 const nopechaClients: NopeCHASolver[] = parseList(process.env.NOPECHA_API_KEY).map(
 	(key) => new NopeCHASolver(key),
 );
+const nopechaRecogClients: NopeCHARecognitionSolver[] = parseList(process.env.NOPECHA_API_KEY).map(
+	(key) => new NopeCHARecognitionSolver(key),
+);
 
 if (nopechaClients.length)
 	console.log(`NopeCHA API key found. ${nopechaClients.length} key(s) enabled.`);
 
 let nopechaIndex = 0;
+let recogIndex = 0;
 
 async function tryClients<T>(
 	clients: { hcaptcha: (sitekey: string, url: string, rqdata?: string) => Promise<T> }[],
@@ -61,6 +66,27 @@ export async function solveCaptcha(data: CaptchaDataFromRequest): Promise<string
 	return Promise.reject(new Error('No captcha provider configured (set NOPECHA_API_KEY).'));
 }
 
+// Recognition path — free 100/day (image task, not Token). Called from browserClaim when Token returns error 18.
+export async function solveHCaptchaRecognition(task: HCaptchaTask): Promise<HCaptchaRecognitionResult> {
+	if (!nopechaRecogClients.length) throw new Error('No captcha provider configured (set NOPECHA_API_KEY).');
+	const n = nopechaRecogClients.length;
+	let lastError: unknown;
+	for (let attempt = 0; attempt < n; attempt++) {
+		const idx = (recogIndex + attempt) % n;
+		try {
+			const result = await nopechaRecogClients[idx].solve(task);
+			recogIndex = (idx + 1) % n;
+			return result;
+		} catch (err) {
+			lastError = err;
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`NopeCHA Recognition key ${idx + 1}/${n} failed: ${msg}${attempt + 1 < n ? ' -> next' : ''}`);
+			if (attempt + 1 >= n) throw lastError;
+		}
+	}
+	throw lastError;
+}
+
 export function canSolveCaptcha(): boolean {
-	return nopechaClients.length > 0;
+	return nopechaClients.length > 0 || nopechaRecogClients.length > 0;
 }
