@@ -48,6 +48,7 @@ if (!(WebSocketShard.prototype as any).__questPatched) {
 export class ClientQuest extends Client {
 	public questManager: QuestManager | null = null;
 	public websocketManager: WebSocketManager;
+	public readonly rawToken: string;
 	constructor(token: string) {
 		if (!token) {
 			throw new Error('Token is required to initialize the client.');
@@ -84,6 +85,7 @@ export class ClientQuest extends Client {
 		};
 		super({ rest, gateway });
 		this.websocketManager = gateway;
+		this.rawToken = token;
 		gateway.on('error', (e) => console.error('[Gateway]', e));
 	}
 	connect() {

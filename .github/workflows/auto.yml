@@ -19,11 +19,17 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Install browser (if BROWSER_CLAIM)
+        if: env.BROWSER_CLAIM == 'true'
+        env:
+          BROWSER_CLAIM: ${{ secrets.BROWSER_CLAIM }}
+        run: npx playwright install chromium --with-deps
       - name: Run bot
         env:
           TOKENS: ${{ secrets.TOKENS }}
           TOKEN: ${{ secrets.TOKEN }}
           NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
+          BROWSER_CLAIM: ${{ secrets.BROWSER_CLAIM }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

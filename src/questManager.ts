@@ -199,6 +199,16 @@ export class QuestManager implements Iterable<Quest> {
 			console.error(`Rewards for this quest have already been claimed.`);
 			return false;
 		}
+		if (process.env.BROWSER_CLAIM === 'true') {
+			try {
+				const { claimViaBrowser } = await import('./browserClaim');
+				const ok = await claimViaBrowser((this.client as any).rawToken ?? '', quest);
+				if (ok) return true;
+				console.warn('[BrowserClaim] not claimed via browser, falling back to direct API');
+			} catch (e) {
+				console.warn('[BrowserClaim] load/claim failed, falling back:', e instanceof Error ? e.message : String(e));
+			}
+		}
 		const agent = new Client('https://discord.com', {
 				connect: buildConnector({
 					ciphers: [

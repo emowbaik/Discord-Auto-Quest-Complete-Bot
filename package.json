@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx --env-file=.env bot.ts",
     "dev": "tsx --env-file=.env --inspect-brk bot.ts",
-    "github": "tsx bot.ts"
+    "github": "tsx bot.ts",
+    "browser:install": "npx playwright install chromium --with-deps"
   },
   "keywords": [],
   "author": "aiko-chan-ai",
@@ -26,5 +27,8 @@
     "@discordjs/rest": "^2.6.2",
     "@discordjs/ws": "2.0.4",
     "undici": "^6.24.1"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
   }
 }
