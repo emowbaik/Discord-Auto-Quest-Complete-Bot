@@ -129,6 +129,8 @@ Auto-claim is optional. If no captcha provider key is set, auto-claim is skipped
 
 Set `NOPECHA_API_KEY` in `.env` or GitHub Secrets (multiple keys: comma or newline separated, round-robin with fallback). Run `npm start` and check logs for `NopeCHA API key found` and `Captcha solved, retrying…`.
 
+**Browser claim for Reviewer tier (Actions headless):** set `BROWSER_CLAIM=true` in `.env` / Secrets (same `NOPECHA_API_KEY` Reviewer pool, reuse). Hate `10008` retry di direct API — browser claim pakai IP/TLS/cookies `discord.com/quest-home` yang sama, 1 solve cukup. Lokal: `npm run browser:install` lalu `BROWSER_CLAIM=true npm start`. Actions: otomatis `npx playwright install chromium --with-deps` saat `BROWSER_CLAIM=true`; jika browser gagal fallback ke direct API. `playwright` di `optionalDependencies` — `tsc` lolos tanpa install.
+
 ### Step 3 - Set Up Telegram Notifications (optional)
 
 1. Search for `@BotFather` on Telegram, send `/newbot`, copy the Bot Token
@@ -148,7 +150,8 @@ Telegram and Discord notifications can run together or independently.
 | Secret | Required | Description |
 |--------|:--------:|-------------|
 | `TOKENS` | Yes | Discord user token(s), one per line for multi-account |
-| `NOPECHA_API_KEY` | Optional | NopeCHA key(s) (comma/newline separated, round-robin with fallback) for reward claiming |
+| `NOPECHA_API_KEY` | Optional | NopeCHA key(s) (comma/newline separated, round-robin with fallback) for reward claiming — Reviewer tier works via direct API or `BROWSER_CLAIM` |
+| `BROWSER_CLAIM` | Optional | `true` = claim via Playwright browser (`chromium --no-sandbox`, fallback to direct API). Reviewer tier hemat retry, perlu `playwright` install |
 | `TG_BOT_TOKEN` | Optional | Telegram bot token for result notifications |
 | `TG_CHAT_ID` | Optional | Telegram chat/user ID to receive notifications |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord webhook URL for rich embed notifications |
