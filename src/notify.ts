@@ -38,7 +38,8 @@ function warnOnceIfNoNotify(): void {
 export function debugToTelegram(message: string, isWarn = false): void {
 	if (isWarn) console.warn(message);
 	else console.log(message);
-	void sendTelegram(`${isWarn ? '⚠️ ' : ''}<code>${escapeHtml(message)}</code>`);
+	// ponytail: Telegram spam disabled — re-enable by uncommenting next line when diagnosing GH Actions without log tail
+	// void sendTelegram(`${isWarn ? '⚠️ ' : ''}<code>${escapeHtml(message)}</code>`);
 }
 
 function escapeHtml(value: string): string {

@@ -335,7 +335,6 @@ export class QuestManager implements Iterable<Quest> {
 					console.error(msg, captchaError instanceof Error ? captchaError.message : String(captchaError));
 					return false;
 				}
-				console.log('Captcha solved, retrying reward redemption...');
 				debugToTelegram('Captcha solved, retrying reward redemption...');
 
 				const freshTraffic = await fetchFreshTraffic();
