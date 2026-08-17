@@ -129,7 +129,7 @@ Auto-claim is optional. If no captcha provider key is set, auto-claim is skipped
 
 Set `NOPECHA_API_KEY` in `.env` or GitHub Secrets (multiple keys: comma or newline separated, round-robin with fallback). Run `npm start` and check logs for `NopeCHA API key found` and `Captcha solved, retrying…`.
 
-**Browser claim for Reviewer tier (Actions headless):** set `BROWSER_CLAIM=true` in `.env` / Secrets (same `NOPECHA_API_KEY` Reviewer pool, reuse). Hate `10008` retry di direct API — browser claim pakai IP/TLS/cookies `discord.com/quest-home` yang sama, 1 solve cukup. Lokal: `npm run browser:install` lalu `BROWSER_CLAIM=true npm start`. Actions: otomatis `npx playwright install chromium --with-deps` saat `BROWSER_CLAIM=true`; jika browser gagal fallback ke direct API. `playwright` di `optionalDependencies` — `tsc` lolos tanpa install.
+**Browser claim — Recognition free tier (Reviewer):** NopeCHA Token API `/v1/token/hcaptcha` is paid-only (`error 18 Feature unavailable`). Free 100/day is via **Recognition API** `POST /v1/recognition/hcaptcha` (`data: {request_type, requester_question, tasklist}`) — the bot handles this automatically when `BROWSER_CLAIM=true`. Flow: browser opens `discord.com/quest-home` with `localStorage.token`, `fetch claim-reward` inside browser context (IP/TLS = browser), if captcha: try Token once, on `error 18` capture `hcaptcha.com` task JSON → `solveHCaptchaRecognition` → auto-click `image_label_binary` tiles → `hcaptcha.getResponse()` → retry with `x-captcha-key`. Set `BROWSER_CLAIM=true` in `.env` / Secrets (same `NOPECHA_API_KEY` Reviewer pool). Local: `npm run browser:install` then `BROWSER_CLAIM=true npm start`. Actions: auto `npx playwright install chromium --with-deps` when `BROWSER_CLAIM=true`; browser fail → fallback direct API. `playwright` in `optionalDependencies` — `tsc` passes without install. Only `image_label_binary` click is implemented; `area_select`/`drag_drop` log and need manual extension fallback.
 
 ### Step 3 - Set Up Telegram Notifications (optional)
 
@@ -232,7 +232,7 @@ Discord-Auto-Quest-Complete-Bot/
 ├── .github/
 │   └── workflows/
 │       └── auto.yml                # GitHub Actions schedule + keepalive
-└── src/
+├── src/
     ├── client.ts                   # Discord selfbot client (Gateway + REST)
     ├── quest.ts                    # Quest model
     ├── questManager.ts             # Quest lifecycle (enroll -> complete -> optional claim)
@@ -240,9 +240,11 @@ Discord-Auto-Quest-Complete-Bot/
     ├── constants.ts                # Discord client properties and user agents
     ├── utils.ts                    # HTTP headers, build number fetch, helpers
     ├── notify.ts                   # Telegram + Discord webhook notifications
-    ├── captcha.ts                  # Optional claim captcha integration
+    ├── captcha.ts                  # Captcha facade (Token + Recognition)
+    ├── browserClaim.ts             # Browser claim + Recognition auto-click
     └── providers/
-        └── nopecha.ts              # Optional NopeCHA Token API provider
+        ├── nopecha.ts              # NopeCHA Token API (paid)
+        └── nopechaRecognition.ts   # NopeCHA Recognition API (free 100/day)
 ```
 
 ## Discord Embed Preview

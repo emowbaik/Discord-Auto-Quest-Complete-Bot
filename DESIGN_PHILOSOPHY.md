@@ -35,12 +35,12 @@ No abstractions for one implementation, no factories, no config that never chang
 
 ## Non-Goals (On Purpose)
 
-- No browser/extension captcha hybrid — API solver covers the job without shipping a browser to Actions.
+- Browser minimal only for claim (Recognition image click), not for enroll/complete — API covers the rest without shipping browser to every run (opt-in `BROWSER_CLAIM=true`).
 - No dashboard UI, no DB — logs + notifications are enough.
 - NoToS-compliant mode — user-token selfbots violate Discord ToS by nature; docs disclose via `> [!CAUTION]` and `SECURITY.md`, logging never leaks raw `TOKENS`.
 
 ## What Would Change the Philosophy
 
 - Discord ships a real OAuth quest claim endpoint → migrate off user tokens entirely.
-- Enterprise hcaptcha without proxy becomes unsolvable via API → reconsider a minimal browser path with strict IP pinning.
+- Recognition 100/day exhausted or enterprise rqdata blocked even via image → add sticky proxy budget or 2captcha/CapSolver fallback (ponytail in `browserClaim.ts`).
 - Multi-DC or >100 accounts → then (and only then) introduce a queue/worker and a small persistence layer.

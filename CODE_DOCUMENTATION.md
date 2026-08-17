@@ -7,7 +7,7 @@ Crisp technical reference — what the code does, not how to log in.
 - `bot.ts` — orchestration, multi-account sequencing
 - `src/client.ts` — Discord Gateway selfbot (`@discordjs/ws` + `@discordjs/rest`)
 - `src/questManager.ts` — quest lifecycle core
-- `src/captcha.ts` / `src/providers/nopecha.ts` — optional reward claim
+- `src/captcha.ts` / `src/providers/nopecha.ts` / `src/providers/nopechaRecognition.ts` + `src/browserClaim.ts` — claim (Token paid vs Recognition free 100/day)
 - `src/notify.ts` — Telegram + Discord webhook reporting
 - `src/utils.ts` — headers + build number
 - `src/constants.ts` / `src/interface.ts` / `src/quest.ts`
@@ -86,11 +86,13 @@ Retry ladder on captcha challenge (`400 captcha_service:'hcaptcha' sitekey 4bb5a
 - Sitekey constant `4bb5aadb-b50f-4f23-b1c2-92b59ba400d5` (Discord hcaptcha enterprise).
 - Build number fetched live from `discord.com/app` assets (`Utils.updateLatestBuildVersion`, 594031 live, fallback 539951) — sent as `x-super-properties.client_build_number`.
 
-## Captcha: src/captcha.ts (67 lines) + providers/nopecha.ts (57)
+## Captcha: src/captcha.ts + providers/nopecha.ts + providers/nopechaRecognition.ts + browserClaim.ts
 
 - `parseList` splits `NOPECHA_API_KEY` by `/[\r\n,]+/` — comma or newline, N keys, round-robin with `tryClients` fallback on `429/402/rate_limited/insufficient_credits`.
 - `NoneCap removed (2026-08-16, chore 1310506)`: enterprise hcaptcha tokens without sticky residential proxy were consistently rejected as `10008 Unknown Message` even at dashboard 100% solved; keep one boring provider. Restore via `src/providers/nonecap.ts` + `NONECAP_*` env if needed — ponytail in `captcha.ts:12`.
-- `NopeCHASolver`: `POST https://api.nopecha.com/v1/token/hcaptcha {sitekey,url,useragent,rqdata?} -> {data: jobId}` then `GET ?id=jobId` poll 3s up to 120s (token when `data !== jobId`). Auth `Basic {key}`.
+- `NopeCHASolver` (Token): `POST https://api.nopecha.com/v1/token/hcaptcha {sitekey,url,useragent,rqdata?} -> {data: jobId}` then `GET ?id=jobId` poll 3s up to 120s. Paid-only; Reviewer tier returns `{"error":18,"message":"Feature unavailable for current plan"}` for enterprise `sitekey 4bb5aadb-b50f-4f23-b1c2-92b59ba400d5` + `rqdata`. Auth `Basic` then `Bearer` fallback.
+- `NopeCHARecognitionSolver` (free 100/day): `POST https://api.nopecha.com/v1/recognition/hcaptcha {data: {request_type, requester_question:{en}, requester_question_example?, tasklist:[{task_key, datapoint_uri, entities?}]}} -> {data: jobId}` then `GET ?id=jobId` poll 2s, handle `error 11` (incomplete) until `data` is `boolean[][] | {x,y,w,h}[][]`. Called via `solveHCaptchaRecognition(task)` in `captcha.ts` or `browserClaim.ts`.
+- `browserClaim.ts` — `BROWSER_CLAIM=true`: `chromium --no-sandbox` + `localStorage.token`, `page.evaluate fetch` `claim-reward` inside browser (IP/TLS = browser). On captcha, try Token once; on `error 18` fall back to Recognition: render `hcaptcha.com/1/api.js` widget with `sitekey+rqdata`, intercept `hcaptcha.com` JSON responses to capture `HCaptchaTask`, `solveHCaptchaRecognition` → `applyRecognitionResult` clicks `image_label_binary` tiles (3x3) in challenge frame → `hcaptcha.getResponse()` → `x-captcha-key` retry. Only `image_label_binary` auto-click done; `area_select`/`drag_drop` throw (manual extension ponytail).
 
 ## Notify: src/notify.ts (193 lines)
 
