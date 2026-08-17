@@ -1,4 +1,5 @@
 import { fetch } from 'undici';
+import { Buffer } from 'node:buffer';
 
 export type HCaptchaTask = {
 	request_type: 'image_label_binary' | 'image_label_area_select' | 'image_drag_drop' | string;
@@ -24,25 +25,49 @@ export class NopeCHARecognitionSolver {
 	constructor(private readonly apiKey: string) {}
 
 	async solve(data: HCaptchaTask): Promise<HCaptchaRecognitionResult> {
-		const jobId = await this.submit(data);
+		const prepared = await this.prepareData(data);
+		const jobId = await this.submit(prepared);
 		return this.poll(jobId);
 	}
 
-	private async submit(data: HCaptchaTask): Promise<string> {
+	private async prepareData(data: HCaptchaTask): Promise<any> {
+		let payload:any = { request_type:(data as any).request_type, requester_question:(data as any).requester_question, tasklist:[] };
+		if((data as any).requester_question_example) payload.requester_question_example=(data as any).requester_question_example;
+		if((data as any).requester_restricted_answer_set) payload.requester_restricted_answer_set=(data as any).requester_restricted_answer_set;
+		console.log(`[NopeCHA Recognition] preparing ${data.tasklist?.length} tasks — fetching datapoint images as base64...`);
+		for(const t of data.tasklist||[]){
+			const entry:any={ task_key:t.task_key };
+			entry.datapoint_uri = await this.uriToBase64(t.datapoint_uri, 'datapoint');
+			if(t.entities?.length){
+				entry.entities=[];
+				for(const e of t.entities) entry.entities.push({ ...e, entity_uri: await this.uriToBase64((e as any).entity_uri, 'entity') });
+			}
+			payload.tasklist.push(entry);
+		}
+		console.log(`[NopeCHA Recognition] prepared payload len=${JSON.stringify(payload).length}`);
+		return payload;
+	}
+	private async uriToBase64(uri:string, label:string): Promise<string> {
+		if(!uri) return uri;
+		if(uri.startsWith('data:')) return uri;
+		try{
+			const res=await fetch(uri, { headers:{ 'User-Agent':'Mozilla/5.0' } });
+			if(!res.ok) throw new Error(`HTTP ${res.status}`);
+			const buf=Buffer.from(await res.arrayBuffer());
+			const ct=res.headers.get('content-type')||'image/jpeg';
+			const b64=`data:${ct};base64,${buf.toString('base64')}`;
+			console.log(`[NopeCHA Recognition] fetched ${label} ${uri.slice(0,50)} -> ${buf.length}b b64 ${b64.length}`);
+			return b64;
+		}catch(e){
+			console.warn(`[NopeCHA Recognition] fetch ${label} failed ${uri.slice(0,60)}: ${e instanceof Error?e.message:String(e)} — keep original uri`);
+			return uri;
+		}
+	}
+	private async submit(data: any): Promise<string> {
 		// sanitize: NopeCHA expects exact hcaptcha shape — strip unknown wrappers like key/request_config if present but keep request_type/requester_question/tasklist
-let payload: any = data;
-if (data && typeof data === 'object') {
- payload = { request_type: (data as any).request_type, requester_question: (data as any).requester_question, tasklist: (data as any).tasklist };
- if ((data as any).requester_question_example) payload.requester_question_example = (data as any).requester_question_example;
- if ((data as any).requester_restricted_answer_set) payload.requester_restricted_answer_set = (data as any).requester_restricted_answer_set;
- // keep image_label_binary separate: ensure 9-wide boolean result compatible, but NopeCHA handles
- // debug raw submit
- console.log(`[NopeCHA Recognition] payload keys=${Object.keys(payload).join(',')} len=${JSON.stringify(payload).length}`);
- // ensure datapoint_uri https, keep entities
- payload.tasklist = (payload.tasklist||[]).map((t:any)=>({ task_key:t.task_key, datapoint_uri:t.datapoint_uri, ...(t.entities?{entities:t.entities}:{}) }));
-}
-const body = JSON.stringify({ data: payload });
-console.log(`[NopeCHA Recognition] submit tasks=${payload.tasklist?.length} type=${payload.request_type} payloadKeys=${Object.keys(payload).join(',')} len=${body.length}`);
+const body = JSON.stringify({ data });
+console.log(`[NopeCHA Recognition] submit tasks=${data.tasklist?.length} type=${data.request_type} len=${body.length}`);
+console.log(`[NopeCHA Recognition] submit ok len=${body.length}`);
 		for (const auth of [`Basic ${this.apiKey}`, `Bearer ${this.apiKey}`]) {
 			const res = await fetch(NopeCHARecognitionSolver.postUrl, {
 				method: 'POST',
@@ -80,7 +105,7 @@ throw new Error(`NopeCHA recognition submit failed: ${JSON.stringify(json)}`);
 				});
 				const json = (await res.json().catch(() => ({}))) as any;
 				if (!res.ok) {
-					if (json?.error === 11 || json?.code === 11) {
+					if ((json?.error === 11 || json?.code === 11 || json?.error===14 || (json?.message&&String(json.message).toLowerCase().includes('incomplete')) ) ) {
 						// Incomplete job — keep polling
 						break;
 					}

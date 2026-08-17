@@ -135,28 +135,23 @@ async function tryRecognitionSolve(page: any, captchaRaw: any, browserFetch: (h:
 				let body = await resp.body().catch(() => null);
 				let text = '';
 				if (body) {
-					const enc = (headers['content-encoding'] || '').toLowerCase();
-					// try brotli first regardless of header — hcaptcha often sends br without header
-					let triedBr=false;
-					try {
-						if (enc.includes('br') || !enc) { triedBr=true; try{ text=zlib.brotliDecompressSync(body).toString('utf-8'); if(!text.includes('request_type')&&!text.includes('tasklist')) throw new Error('not json'); }catch(e){ if(enc.includes('br')) throw e; text=''; } }
-						if(!text){
-							if (enc.includes('gzip')) text = zlib.gunzipSync(body).toString('utf-8');
-							else if (enc.includes('deflate')) text = zlib.inflateSync(body).toString('utf-8');
-							else if(!triedBr) text = zlib.brotliDecompressSync(body).toString('utf-8');
-							else text = body.toString('utf-8');
-						}
-					} catch { try { if(!triedBr) text = zlib.brotliDecompressSync(body).toString('utf-8'); else text = body.toString('utf-8'); } catch { text = body.toString('utf-8'); } }
+					const rawUtf8 = body.toString('utf-8');
+					if(rawUtf8.includes('request_type')) text=rawUtf8;
+					else {
+						const tryDec=(fn:()=>string,label:string)=>{ try{ const t=fn(); if(t.includes('request_type')){ console.log(`[BrowserClaim][Recognition] getcaptcha decoded via ${label}`); return t; } return ''; }catch{ return ''; } };
+						text = tryDec(()=>zlib.brotliDecompressSync(body).toString('utf-8'),'br') || tryDec(()=>zlib.gunzipSync(body).toString('utf-8'),'gzip') || tryDec(()=>zlib.inflateSync(body).toString('utf-8'),'deflate') || rawUtf8;
+					}
 					console.log(`[BrowserClaim][Recognition] getcaptcha route raw ${text.slice(0, 900)}`);
 					try { getcaptchaJson = JSON.parse(text); } catch {}
 					const findTask = (obj: any, d = 0): any => { if (!obj || typeof obj !== 'object' || d > 6) return null; if (obj.request_type && Array.isArray(obj.tasklist)) return obj; for (const v of Object.values(obj)) { if (v && typeof v === 'object') { const r = findTask(v, d + 1); if (r) return r; } } return null; };
 					const c = findTask(getcaptchaJson);
 					if (c) { captured = c as HCaptchaTask; console.log(`[BrowserClaim][Recognition] captured via route ${captured.request_type} tasks=${captured.tasklist.length}`); }
+					const newHeaders: Record<string, string> = { ...headers };
+					delete newHeaders['content-encoding']; delete newHeaders['content-length'];
+					await route.fulfill({ status: resp.status(), headers: newHeaders, body: text || body });
+				} else {
+					await route.fulfill({ status: resp.status(), headers: resp.headers(), body });
 				}
-				// reconstruct response without content-encoding so browser gets plain text gate
-				const newHeaders: Record<string, string> = { ...headers };
-				delete newHeaders['content-encoding']; delete newHeaders['content-length'];
-				await route.fulfill({ status: resp.status(), headers: newHeaders, body: text || body });
 			} catch (e) { try { await route.continue(); } catch {} }
 		});
 	} catch {}
@@ -255,9 +250,28 @@ page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } ca
 		} catch {}
 		if (hcaptchaToken) break;
 	}
-	if (!hcaptchaToken) { console.warn(`[BrowserClaim][Recognition] token empty after clicks`); return false; }
+	if (!hcaptchaToken) {
+		// auto-solve rejected (hcaptcha "Please try again"). Give user a chance to solve manually in the (visible) iframe,
+		// then bot auto-claims once token appears. This is the reliable free-tier path.
+		console.warn(`[BrowserClaim][Recognition] token empty after clicks — switching to manual fallback`);
+		if (!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS==='false') console.warn(`[BrowserClaim][Recognition] Klik puzzle hCaptcha di browser yang terbuka (BROWSER_HEADLESS=false). Bot akan auto-claim saat selesai. Menunggu max 120s...`);
+		else console.warn(`[BrowserClaim][Recognition] set BROWSER_HEADLESS=false untuk solve captcha secara manual lalu claim otomatis.`);
+		for (let w = 0; w < 120; w++) {
+			try {
+				hcaptchaToken = await page.evaluate(`(id => { const w = window; try { if (w.__hcToken) return w.__hcToken; try { const t = w.hcaptcha.getResponse(id); if (t) return t; } catch {} return w.hcaptcha.getResponse() || ''; } catch { return ''; } })(${JSON.stringify(widgetId)})`).catch(() => '');
+			} catch {}
+			if (hcaptchaToken) break;
+			await page.waitForTimeout(1000);
+			if (w % 15 === 14) console.log(`[BrowserClaim][Recognition] menunggu manual solve... ${w + 1}s`);
+		}
+		if (!hcaptchaToken) { console.warn(`[BrowserClaim][Recognition] manual solve timeout — claim gagal`); return false; }
+		console.log(`[BrowserClaim][Recognition] manual token acquired len=${hcaptchaToken.length}, claiming...`);
+	}
 	return await claimWithToken(hcaptchaToken, captchaRaw, browserFetch, quest);
 }
+
+
+function clamp(n:number,lo=0,hi=500){ return Math.max(lo,Math.min(hi,n)); }
 
 async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any): Promise<void> {
 	const reqType = (task as any).request_type as string;
@@ -276,47 +290,80 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		try { if (challengeFrame.evaluate) await challengeFrame.evaluate(() => { const b = (document.querySelector('[class*="button-submit"]') ?? document.querySelector('div.button-submit') ?? document.querySelector('button[type="submit"]')) as HTMLElement | null; if (b) b.click(); }); else await challengeFrame.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
 		await page.waitForTimeout(1500); return;
 	}
-	if (reqType === 'image_drag_drop' || reqType === 'image_label_area_select') {
+	if (reqType === 'image_drag_drop' ) {
+		console.log(`[BrowserClaim][Recognition] ${reqType} result: ${JSON.stringify(result).slice(0, 600)}`);
+		// drag from entity coords -> NopeCHA answer, using playwright page.mouse (trusted CDP events)
+		let boxes:any[]=[]; if(Array.isArray(result)&&result.length){ if(Array.isArray(result[0])) boxes=result[0] as any[]; else if(result[0]&&typeof result[0]==='object'&&'x' in result[0]) boxes=result as any[]; }
+		const tasklist=(task as any).tasklist as any[]; const entityEnt=tasklist?.[0]?.entities?.[0]; const eCoords=entityEnt?.coords as number[]|undefined; const eSize=entityEnt?.size as number[]|undefined;
+		const b=boxes[0]||{x:250,y:250}; // NopeCHA answer normalized 0-500
+		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
+		if(!fr) throw new Error('no challenge frame');
+		const bb:any=await fr.locator('canvas').first().boundingBox().catch(()=>null) || await fr.locator('[class*="image"] img, .challenge-image img, img').first().boundingBox().catch(()=>null);
+		if(bb){
+			const sx=(eCoords?.[0]??250), sy=(eCoords?.[1]??250);
+			// NopeCHA drag_drop returns x,y,w,h in 0-100 (percent), not 0-500. scale x5.
+			const ex=(b.x??50)*5, ey=(b.y??50)*5;
+			const x1=bb.x+((sx+(eSize?.[0]??0)/2)/500)*bb.width, y1=bb.y+((sy+(eSize?.[1]??0)/2)/500)*bb.height;
+			const x2=bb.x+(clamp(ex)/500)*bb.width, y2=bb.y+(clamp(ey)/500)*bb.height;
+			console.log(`[BrowserClaim][Recognition] drag (${sx},${sy})->(${ex},${ey}) canvas ${JSON.stringify(bb)}`);
+			await page.mouse.move(x1,y1,{steps:4});
+			await page.mouse.down();
+			for(let i=1;i<=8;i++){ await page.mouse.move(x1+(x2-x1)*i/8, y1+(y2-y1)*i/8,{steps:2}); await page.waitForTimeout(40); }
+			await page.mouse.up();
+			await page.waitForTimeout(800);
+			// debug iframe
+			try{ const dbg2:any=await fr.evaluate(()=>{ const buts=[...document.querySelectorAll('button,[role="button"],[class*="button"],[class*="submit"]')].map(b=>({t:(b.textContent||'').trim().slice(0,15),c:(b.className||'').toString().slice(0,30),id:b.id,v:getComputedStyle(b).visibility})); return {body:(document.body?.innerText||'').slice(0,120),buttons:buts.slice(0,12),sub:!!document.querySelector('[class*="button-submit"],[class*="submit"]')}; }).catch(()=>null); if(dbg2) console.log(`[BrowserClaim][Recognition] iframe dbg ${JSON.stringify(dbg2).slice(0,900)}`); }catch{}
+			try{
+				const sbb:any=await fr.locator('[class*="button-submit"], .button-submit, button[type="submit"]').first().boundingBox().catch(()=>null);
+				if(sbb){ await page.mouse.move(sbb.x+sbb.width/2, sbb.y+sbb.height/2,{steps:3}); await page.mouse.down(); await page.waitForTimeout(90); await page.mouse.up(); console.log(`[BrowserClaim][Recognition] real submit at ${JSON.stringify(sbb)}`); }
+				else { await fr.evaluate(()=>{ const b=document.querySelector('[class*="button-submit"], .button-submit, button[type="submit"]') as HTMLElement|null; if(b) (b as any).click(); }); }
+			}catch{}
+			await page.waitForTimeout(3000);
+			return;
+		}
+		throw new Error('no canvas boundingBox for drag');
+	}
+	if (reqType === 'image_label_area_select') {
 		// Result is array of {x,y,w,h} or {x,y} per task. Use coords to compute clicks/drags inside challenge iframe.
 		// For now click center of each returned box — hCaptcha accepts click for area_select, drag for drag_drop may need drag.
 		console.log(`[BrowserClaim][Recognition] ${reqType} result: ${JSON.stringify(result).slice(0, 600)}`);
-		const frames = page.frames(); let challengeFrame: any = null;
+const frames = page.frames(); let challengeFrame: any = null;
 		for (const f of frames) { try { const u = f.url(); if (u.includes('hcaptcha.com/captcha') || u.includes('hcaptcha.com/checkcaptcha') || u.includes('hcaptcha.com')) { challengeFrame = f; break; } } catch {} }
 		if (!challengeFrame) challengeFrame = page.frameLocator('iframe[src*="hcaptcha.com"]').first();
-		// Normalize result to list of boxes
-		let boxes: any[] = [];
-		if (Array.isArray(result) && result.length) {
-			if (Array.isArray(result[0])) boxes = result[0] as any[];
-			else if (result[0] && typeof result[0] === 'object' && 'x' in result[0]) boxes = result as any[];
-		}
+		const boxes:any[]=[]; // legacy single
+		const _tasklist=(task as any).tasklist as any[];
+		const _allBoxes:Array<any[]> = Array.isArray(result[0]) && Array.isArray(result[0][0]) ? result as any[][] : (Array.isArray(result[0]) && typeof result[0][0]==='object' ? [result[0] as any[]] : (Array.isArray(result[0]) ? [result as any[]]: []));
+		const tasklist=_tasklist; const allBoxes=_allBoxes;
 		console.log(`[BrowserClaim][Recognition] clicking ${boxes.length} boxes for ${reqType}`);
-		for (const b of boxes) {
-			const cx = b.x + (b.w ?? 20) / 2;
-			const cy = b.y + (b.h ?? 20) / 2;
-			try {
-				if (challengeFrame.evaluate) {
-					await challengeFrame.evaluate(({ x, y }: any) => {
-						const el = document.elementFromPoint(x, y) as HTMLElement | null;
-						if (el) el.click();
-						else {
-							// fallback click on image container center approximation
-							const img = document.querySelector('.challenge-image, [class*="challenge"] img, .task-image') as HTMLElement | null;
-							if (img) {
-								const r = img.getBoundingClientRect();
-								const tx = r.left + (x / 500) * r.width;
-								const ty = r.top + (y / 500) * r.height;
-								const t = document.elementFromPoint(tx, ty) as HTMLElement | null;
-								if (t) t.click();
-							}
-						}
-					}, { x: cx, y: cy });
-				} else {
-					await challengeFrame.locator('canvas, img').first().click({ position: { x: cx % 300, y: cy % 300 } }).catch(() => {});
-				}
-				await page.waitForTimeout(400);
-			} catch {}
+		// click per-task sequence: first image -> submit -> second image -> submit
+		for(let ti=0; ti<tasklist.length; ti++){
+			const taskBoxes=allBoxes[ti]||allBoxes[0]||[];
+			console.log(`[BrowserClaim][Recognition] task ${ti} clicking ${taskBoxes.length}`);
+			for(const b of taskBoxes){
+				const cx=b.x + (b.w||0)/2; const cy=b.y + (b.h||0)/2;
+				const normX=Math.max(0,Math.min(500,cx)); const normY=Math.max(0,Math.min(500,cy));
+				try{
+					if(challengeFrame.evaluate){
+						await challengeFrame.evaluate(({x,y}:any)=>{
+							const inner=():HTMLElement|null=>{
+								const img=document.querySelector('.challenge-image img, .task-image img, canvas, img') as HTMLElement|null;
+								if(!img) return null;
+								const r=img.getBoundingClientRect();
+								const tx=r.left + (x/500)*r.width;
+								const ty=r.top + (y/500)*r.height;
+								return document.elementFromPoint(tx,ty) as HTMLElement|null || img;
+							};
+							const el=inner(); if(el) el.click();
+						}, {x:normX, y:normY});
+					} else {
+	await challengeFrame.locator('canvas, img').first().click({ position:{x: normX%300, y: normY%100}}).catch(()=>{}); }
+					await page.waitForTimeout(500);
+				}catch{}
+			}
+			try{ if(challengeFrame.evaluate) await challengeFrame.evaluate(()=>{ const b=document.querySelector('[class*="button-submit"], .button-submit, button') as HTMLElement|null; if(b) b.click(); }); else await challengeFrame.locator('[class*="button-submit"], button').first().click({timeout:3000}).catch(()=>{});}catch{}
+			await page.waitForTimeout(1800);
 		}
-		try { if (challengeFrame.evaluate) await challengeFrame.evaluate(() => { const b = (document.querySelector('[class*="button-submit"]') ?? document.querySelector('div.button-submit') ?? document.querySelector('button[type="submit"]')) as HTMLElement | null; if (b) b.click(); }); else await challengeFrame.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
+		try{ if(challengeFrame.evaluate) await challengeFrame.evaluate(()=>{ const b=document.querySelector('[class*="button-submit"], .button-submit, button') as HTMLElement|null; if(b) b.click(); }); }catch{}
 		await page.waitForTimeout(1500); return;
 	}
 	throw new Error(`request_type ${reqType} not implemented`);
