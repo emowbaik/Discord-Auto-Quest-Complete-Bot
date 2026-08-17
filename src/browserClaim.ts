@@ -17,14 +17,16 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 	const { chromium } = pw;
 	let browser: any;
 	try {
+		const headless = process.env.BROWSER_HEADLESS !== 'false';
 		browser = await chromium.launch({
-			headless: true,
+			headless,
 			args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled'],
 		});
 		const context = await browser.newContext({
 			locale: 'en-US',
 			userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
 			ignoreHTTPSErrors: true,
+			bypassCSP: true,
 		});
 		await context.addInitScript((t: string) => {
 			try { localStorage.setItem('token', `"${t}"`); } catch {}
@@ -91,36 +93,82 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 async function tryRecognitionSolve(page: any, captchaRaw: any, browserFetch: (h: Record<string, string>, b?: any) => Promise<{ status: number; ok: boolean; json: any; text: string }>, quest: Quest): Promise<boolean> {
 	console.log(`[BrowserClaim][Recognition] image solve sitekey=${captchaRaw.captcha_sitekey}`);
 	let captured: HCaptchaTask | null = null;
+	let seenUrls: string[] = [];
 	const handler = async (response: any) => {
 		try {
-			const url = response.url(); if (!url.includes('hcaptcha.com')) return;
-			const ct = response.headers()['content-type'] ?? ''; if (!ct.includes('json')) return;
-			const json = await response.json().catch(() => null); if (!json) return;
+			const url = response.url();
+			if (!url.includes('hcaptcha.com') && !url.includes('hcaptcha')) return;
+			seenUrls.push(url);
+			// log every hcaptcha response for debugging
+			if (seenUrls.length <= 10) console.log(`[BrowserClaim][Recognition] seen hcaptcha url: ${url} status=${response.status()}`);
+			let json: any = null;
+			try { json = await response.json(); } catch { try { const t = await response.text(); json = t ? JSON.parse(t) : null; } catch {} }
+			if (!json) return;
 			const data = json?.data ?? json?.c ?? json;
-			if (data?.request_type && data?.tasklist && Array.isArray(data.tasklist)) { captured = data as HCaptchaTask; console.log(`[BrowserClaim][Recognition] captured ${data.request_type} tasks=${data.tasklist.length}`); }
-			else if (json?.request_type && json?.tasklist) { captured = json as HCaptchaTask; console.log(`[BrowserClaim][Recognition] captured ${json.request_type}`); }
+			// also handle nested pass `requester_question` check
+			const candidate = data?.request_type ? data : (json?.request_type ? json : null);
+			if (candidate?.request_type && candidate?.tasklist && Array.isArray(candidate.tasklist)) {
+				captured = candidate as HCaptchaTask;
+				console.log(`[BrowserClaim][Recognition] captured ${candidate.request_type} tasks=${candidate.tasklist.length} q="${candidate.requester_question?.en?.slice(0, 60) ?? ''}"`);
+			}
 		} catch {}
 	};
 	page.on('response', handler);
+	// also log console/page errors for CSP debug
+	const consoleHandler = (msg: any) => { try { const t = msg.text(); if (/hcaptcha|csp|blocked|error/i.test(t)) console.log(`[BrowserConsole] ${t.slice(0, 400)}`); } catch {} };
+	page.on('console', consoleHandler);
 	try {
+		// Bypass Discord CSP: addScriptTag is more reliable than evaluate createElement
+		let hcaptchaReady = false;
+		try {
+			await page.addScriptTag({ url: 'https://js.hcaptcha.com/1/api.js?render=explicit', type: 'text/javascript' } as any);
+			hcaptchaReady = true;
+		} catch (e) {
+			console.warn(`[BrowserClaim][Recognition] addScriptTag js.hcaptcha.com failed, trying hcaptcha.com:`, e instanceof Error ? e.message : String(e));
+		}
+		if (!hcaptchaReady) {
+			try { await page.addScriptTag({ url: 'https://hcaptcha.com/1/api.js?render=explicit' } as any); hcaptchaReady = true; } catch {}
+		}
+		// wait for hcaptcha object
+		for (let i = 0; i < 50; i++) {
+			const has = await page.evaluate(() => !!(window as any).hcaptcha?.render).catch(() => false);
+			if (has) break;
+			await page.waitForTimeout(200);
+		}
+		const hasHcaptcha = await page.evaluate(() => !!(window as any).hcaptcha?.render).catch(() => false);
+		if (!hasHcaptcha) throw new Error('hcaptcha not ready after script load (CSP blocked?)');
 		await page.evaluate(async (args: { sitekey: string; rqdata?: string }) => {
-			const w = window as any; if (w.__hcaptchaInjected) return; w.__hcaptchaInjected = true;
+			const w = window as any;
+			if (w.__hcaptchaInjected) return;
+			w.__hcaptchaInjected = true;
 			let div = document.getElementById('__hcaptcha_container');
-			if (!div) { div = document.createElement('div'); div.id = '__hcaptcha_container'; div.style.position = 'fixed'; div.style.top = '10px'; div.style.left = '10px'; div.style.zIndex = '99999'; div.style.background = 'white'; div.style.padding = '8px'; document.body.appendChild(div); }
-			if (!w.hcaptcha) {
-				await new Promise<void>((resolve, reject) => {
-					const s = document.createElement('script'); s.src = 'https://hcaptcha.com/1/api.js?render=explicit'; s.async = true; s.onload = () => resolve(); s.onerror = () => reject(new Error('hcaptcha load failed')); document.head.appendChild(s);
-				});
-				for (let i = 0; i < 30; i++) { if ((window as any).hcaptcha?.render) break; await new Promise((r) => setTimeout(r, 200)); }
+			if (!div) {
+				div = document.createElement('div');
+				div.id = '__hcaptcha_container';
+				div.style.position = 'fixed';
+				div.style.top = '10px';
+				div.style.left = '10px';
+				div.style.zIndex = '99999';
+				div.style.background = 'white';
+				div.style.padding = '8px';
+				document.body.appendChild(div);
 			}
-			const hc = (window as any).hcaptcha; if (!hc?.render) throw new Error('hcaptcha not ready');
 			try { div.innerHTML = ''; } catch {}
-			hc.render(div, { sitekey: args.sitekey, theme: 'dark', ...(args.rqdata ? { rqdata: args.rqdata } : {}) });
+			w.hcaptcha.render(div, { sitekey: args.sitekey, theme: 'dark', ...(args.rqdata ? { rqdata: args.rqdata } : {}) });
 		}, { sitekey: captchaRaw.captcha_sitekey, rqdata: captchaRaw.captcha_rqdata });
-	} catch (e) { console.warn(`[BrowserClaim][Recognition] inject failed:`, e instanceof Error ? e.message : String(e)); page.off('response', handler); return false; }
-	for (let i = 0; i < 40; i++) { if (captured) break; await page.waitForTimeout(500); }
+	} catch (e) { console.warn(`[BrowserClaim][Recognition] inject failed:`, e instanceof Error ? e.message : String(e)); page.off('response', handler); page.off('console', consoleHandler); return false; }
+	for (let i = 0; i < 60; i++) {
+		if (captured) break;
+		if (i % 10 === 0 && i > 0) console.log(`[BrowserClaim][Recognition] waiting task... ${i * 0.5}s seen=${seenUrls.length}`);
+		await page.waitForTimeout(500);
+	}
 	page.off('response', handler);
-	if (!captured) { console.warn(`[BrowserClaim][Recognition] no task captured (timeout)`); return false; }
+	page.off('console', consoleHandler);
+	if (!captured) {
+		console.warn(`[BrowserClaim][Recognition] no task captured (timeout 30s). seen ${seenUrls.length} hcaptcha urls: ${seenUrls.slice(0, 5).join(', ') || 'none'}`);
+		console.warn(`[BrowserClaim][Recognition] hint: Discord CSP may block hcaptcha script, or rqdata expired. Coba: 1) set BROWSER_HEADLESS=false untuk lihat widget, 2) cek .env NOPECHA_API_KEY valid, 3) quest "Overkill" mungkin perlu klaim manual di Discord app jika terus gagal.`);
+		return false;
+	}
 	const task: HCaptchaTask = captured;
 	let result: any;
 	try { console.log(`[BrowserClaim][Recognition] solving ${(task as any).request_type}...`); result = await solveHCaptchaRecognition(task); console.log(`[BrowserClaim][Recognition] result: ${JSON.stringify(result).slice(0, 400)}`); } catch (e) { console.error(`[BrowserClaim][Recognition] solve failed:`, e instanceof Error ? e.message : String(e)); return false; }
