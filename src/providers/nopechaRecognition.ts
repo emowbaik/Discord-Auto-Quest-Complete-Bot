@@ -29,7 +29,20 @@ export class NopeCHARecognitionSolver {
 	}
 
 	private async submit(data: HCaptchaTask): Promise<string> {
-		const body = JSON.stringify({ data });
+		// sanitize: NopeCHA expects exact hcaptcha shape — strip unknown wrappers like key/request_config if present but keep request_type/requester_question/tasklist
+let payload: any = data;
+if (data && typeof data === 'object') {
+ payload = { request_type: (data as any).request_type, requester_question: (data as any).requester_question, tasklist: (data as any).tasklist };
+ if ((data as any).requester_question_example) payload.requester_question_example = (data as any).requester_question_example;
+ if ((data as any).requester_restricted_answer_set) payload.requester_restricted_answer_set = (data as any).requester_restricted_answer_set;
+ // keep image_label_binary separate: ensure 9-wide boolean result compatible, but NopeCHA handles
+ // debug raw submit
+ console.log(`[NopeCHA Recognition] payload keys=${Object.keys(payload).join(',')} len=${JSON.stringify(payload).length}`);
+ // ensure datapoint_uri https, keep entities
+ payload.tasklist = (payload.tasklist||[]).map((t:any)=>({ task_key:t.task_key, datapoint_uri:t.datapoint_uri, ...(t.entities?{entities:t.entities}:{}) }));
+}
+const body = JSON.stringify({ data: payload });
+console.log(`[NopeCHA Recognition] submit tasks=${payload.tasklist?.length} type=${payload.request_type} payloadKeys=${Object.keys(payload).join(',')} len=${body.length}`);
 		for (const auth of [`Basic ${this.apiKey}`, `Bearer ${this.apiKey}`]) {
 			const res = await fetch(NopeCHARecognitionSolver.postUrl, {
 				method: 'POST',
@@ -40,7 +53,19 @@ export class NopeCHARecognitionSolver {
 			if (res.ok && json.data) return json.data as string;
 			// 401/403 try next auth, else throw
 			if (res.status === 401 || res.status === 403) continue;
-			throw new Error(`NopeCHA recognition submit failed: ${JSON.stringify(json)}`);
+			// if error 10 (Invalid request / Failed to load data) try full raw fallback once
+if (json?.error===10 && (data as any).key) {
+ console.log('[NopeCHA Recognition] retry full raw (with key/request_config) after error 10');
+ const fullBody = JSON.stringify({ data });
+ for (const auth2 of [`Basic ${this.apiKey}`, `Bearer ${this.apiKey}`]) {
+  const r2 = await fetch(NopeCHARecognitionSolver.postUrl, { method:'POST', headers:{ Authorization:auth2,'Content-Type':'application/json'}, body: fullBody });
+  const j2 = await r2.json().catch(()=>({})) as any;
+  if (r2.ok && j2.data) return j2.data as string;
+  if (r2.status===401||r2.status===403) continue;
+  throw new Error(`NopeCHA recognition submit retry failed: ${JSON.stringify(j2)}`);
+ }
+}
+throw new Error(`NopeCHA recognition submit failed: ${JSON.stringify(json)}`);
 		}
 		throw new Error('NopeCHA recognition submit failed: auth rejected (check NOPECHA_API_KEY)');
 	}
@@ -59,7 +84,10 @@ export class NopeCHARecognitionSolver {
 						// Incomplete job — keep polling
 						break;
 					}
-					throw new Error(`NopeCHA recognition poll failed: ${JSON.stringify(json)}`);
+						if (json?.error===10) {
+					console.warn(`[NopeCHA Recognition] poll error 10 — likely unsupported task/exhausted datapoint. Will fallback to manual.`);
+				}
+				throw new Error(`NopeCHA recognition poll failed: ${JSON.stringify(json)} bodyOk=${res.ok} status=${res.status}`);
 				}
 				if (json.data && json.data !== jobId) return json.data as HCaptchaRecognitionResult;
 				break;
