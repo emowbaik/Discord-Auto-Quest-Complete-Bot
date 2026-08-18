@@ -27,7 +27,7 @@ export class OpenAIVisionSolver {
 	private apiKey: string;
 	private model: string;
 	constructor(baseUrl: string, apiKey: string, model: string) {
-		this.baseUrl = baseUrl.replace(/\/+$/, '');
+		this.baseUrl = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
 		this.apiKey = apiKey;
 		this.model = model;
 	}
@@ -38,7 +38,7 @@ export class OpenAIVisionSolver {
 		const images: Array<{type:"image_url";image_url:{url:string}}> = [];
 		for (const t of task.tasklist || []) { if (t.datapoint_uri) images.push({type:"image_url",image_url:{url:t.datapoint_uri}}); }
 		if (!images.length) throw new Error('No images in task');
-		const body = {model:this.model,messages:[{role:'user',content:[{type:'text',text:prompt},...images]}],max_tokens:512,temperature:0.1};
+		const body = {model:this.model,messages:[{role:'user',content:[{type:'text',text:prompt},...images]}],max_tokens:2048,temperature:0.1};
 		const res = await fetch(this.baseUrl+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+this.apiKey},body:JSON.stringify(body)});
 		if (!res.ok) { const txt = await res.text(); throw new Error('Vision API '+res.status+': '+txt.slice(0,300)); }
 		const data = await res.json() as any;
