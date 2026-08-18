@@ -19,17 +19,34 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+
       - name: Install browser (if BROWSER_CLAIM)
         if: env.BROWSER_CLAIM == 'true'
         env:
           BROWSER_CLAIM: ${{ secrets.BROWSER_CLAIM }}
         run: npx playwright install chromium --with-deps
+
+      - name: Setup virtual display for extension/non-headless (if needed)
+        if: env.BROWSER_EXTENSION_PATH != '' || env.BROWSER_HEADLESS == 'false'
+        env:
+          BROWSER_EXTENSION_PATH: ${{ secrets.BROWSER_EXTENSION_PATH }}
+          BROWSER_HEADLESS: ${{ secrets.BROWSER_HEADLESS }}
+        run: |
+          sudo apt-get install -y xvfb
+          Xvfb :99 -screen 0 1280x800x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          echo "Xvfb started on :99"
+
       - name: Run bot
         env:
           TOKENS: ${{ secrets.TOKENS }}
           TOKEN: ${{ secrets.TOKEN }}
-          NOPECHA_API_KEY: ${{ secrets.NOPECHA_API_KEY }}
           BROWSER_CLAIM: ${{ secrets.BROWSER_CLAIM }}
+          BROWSER_HEADLESS: ${{ secrets.BROWSER_HEADLESS }}
+          BROWSER_EXTENSION_PATH: ${{ secrets.BROWSER_EXTENSION_PATH }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -49,7 +66,7 @@ jobs:
               gh run delete $run_id || true
             fi
           done
-          echo "✅ Cleanup done — only latest run kept."
+          echo "Cleanup done — only latest run kept."
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
