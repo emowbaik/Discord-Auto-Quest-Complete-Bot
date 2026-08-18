@@ -1,0 +1,63 @@
+{
+   "action": {
+      "default_popup": "src/popup/index.html"
+   },
+   "background": {
+      "service_worker": "service-worker-loader.js",
+      "type": "module"
+   },
+   "content_scripts": [ {
+      "js": [ "assets/index.ts-loader-PdsOhnZW.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_idle"
+   }, {
+      "js": [ "assets/provision.ts-loader-DoJCfbXa.js" ],
+      "matches": [ "https://nonecap.com/ext/provision*", "https://www.nonecap.com/ext/provision*" ],
+      "run_at": "document_idle"
+   }, {
+      "all_frames": true,
+      "js": [ "assets/index.ts-loader-DrKvEFAk.js" ],
+      "matches": [ "https://newassets.hcaptcha.com/*" ],
+      "run_at": "document_idle"
+   }, {
+      "all_frames": true,
+      "js": [ "assets/tl-capture.ts-loader-B0oI-rD8.js" ],
+      "matches": [ "https://newassets.hcaptcha.com/*" ],
+      "run_at": "document_start",
+      "world": "MAIN"
+   }, {
+      "all_frames": true,
+      "js": [ "assets/tl-relay.ts-loader-CELUgrbT.js" ],
+      "matches": [ "https://newassets.hcaptcha.com/*" ],
+      "run_at": "document_start"
+   } ],
+   "description": "Automatically solves hCaptcha challenges in your browser using the NoneCap API.",
+   "host_permissions": [ "\u003Call_urls>" ],
+   "icons": {
+      "128": "icons/icon128.png",
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwZax/TdVHRBuOFYhpqp8+pDhg9n6cTcusdsY7ifxSlWY29P0oVvrwXFBmKmtPEQ7BgGLKb2jZd0wGA4Hz31DRhEJP7A8/CWYDefPJrSAliAer7UwXql1IEul9sVDkg+/iBQIQlzvJlkX7k19tiFA6sGZ9ji2NbZCviJiSBtEffB2TLd0YMajHYLbcWxECNkjPikm3ZX2PrIQVtYqrLjKwMEQz+YdF1ZobG6lhswD7hMAI2PjilbYLnSZdH8AI/FepSyIZJuGCbzy2sYCnaP3xPaJUl8+R7q8sc04qO8I6WAVluFRo+Knnh3kqJ9oI7vBrCtCbhlSuMhvsMc+LRWoFQIDAQAB",
+   "manifest_version": 3,
+   "minimum_chrome_version": "120",
+   "name": "NoneCap — hCaptcha Auto Solver",
+   "options_page": "src/options/index.html",
+   "permissions": [ "storage", "tabs", "alarms", "debugger" ],
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "0.3.16",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "assets/storage-DHnAY3bY.js", "assets/messages-B9tYjNaO.js", "assets/fail-reason-DTx8ZrjW.js", "assets/widgets-CHTZm4Am.js", "assets/index.ts-B_iwgSpP.js" ],
+      "use_dynamic_url": false
+   }, {
+      "matches": [ "https://nonecap.com/*", "https://www.nonecap.com/*" ],
+      "resources": [ "assets/provision-BEPgr0E7.js", "assets/provision.ts-COtry-3L.js" ],
+      "use_dynamic_url": false
+   }, {
+      "matches": [ "https://newassets.hcaptcha.com/*" ],
+      "resources": [ "assets/storage-DHnAY3bY.js", "assets/messages-B9tYjNaO.js", "assets/index.ts-DOdBfjug.js", "assets/tl-capture.ts-MpQQvI-z.js", "assets/tl-relay.ts-h7q7J4z1.js" ],
+      "use_dynamic_url": false
+   } ]
+}
