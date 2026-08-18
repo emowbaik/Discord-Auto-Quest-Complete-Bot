@@ -3,8 +3,16 @@ import type { Quest } from './quest';
 import type { HCaptchaTask } from './providers/openaiVision';
 import * as zlib from 'node:zlib';
 
-// Browser claim: invisible execute -> token auto (no quota) or visible -> Recognition image click (free 100/day).
-// ponytail: extension 0-kredit -> replace Recognition with extension wait
+// Browser claim flow priority:
+// 1. Extension (BROWSER_EXTENSION_PATH set) — NoneCap/etc auto-solves natively, best success rate
+// 2. Vision API (OPENAI_BASE_URL set) — OpenAI-compatible vision provider, moderate success
+// 3. Manual fallback — visible browser, user solves, bot auto-claims
+
+const EXTENSION_PATH = process.env.BROWSER_EXTENSION_PATH || '';
+// Temp dir for each extension browser session (persistent context needs a dir)
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 export async function claimViaBrowser(token: string, quest: Quest): Promise<boolean> {
 	let pw: any;
@@ -16,19 +24,40 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 		return false;
 	}
 	const { chromium } = pw;
-	let browser: any;
+	let browser: any; let context: any; let usingExtension = false;
 	try {
 		const headless = process.env.BROWSER_HEADLESS !== 'false';
-		browser = await chromium.launch({
-			headless,
-			args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled'],
-		});
-		const context = await browser.newContext({
-			locale: 'en-US',
-			userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-			ignoreHTTPSErrors: true,
-			bypassCSP: true,
-		});
+		if (EXTENSION_PATH && fs.existsSync(EXTENSION_PATH)) {
+			// Extension requires non-headless + persistent context
+			usingExtension = true;
+			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-ext-'));
+			console.log(`[BrowserClaim] loading extension from ${EXTENSION_PATH}`);
+			context = await chromium.launchPersistentContext(tmpDir, {
+				headless: false, // extensions require non-headless
+				locale: 'en-US',
+				userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+				ignoreHTTPSErrors: true,
+				bypassCSP: true,
+				args: [
+					'--no-sandbox', '--disable-setuid-sandbox',
+					`--disable-extensions-except=${EXTENSION_PATH}`,
+					`--load-extension=${EXTENSION_PATH}`,
+					'--disable-blink-features=AutomationControlled',
+				],
+			});
+			browser = context; // persistentContext acts as browser for close()
+		} else {
+			browser = await chromium.launch({
+				headless,
+				args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled'],
+			});
+			context = await browser.newContext({
+				locale: 'en-US',
+				userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+				ignoreHTTPSErrors: true,
+				bypassCSP: true,
+			});
+		}
 		await context.addInitScript(() => { try { const w:any=window; if(w.__hcHook) return; w.__hcHook=true; w.__hcTask=null; const f:any=(o:any,d=0):any=>{if(!o||typeof o!=='object'||d>8) return null; if(o.request_type&&Array.isArray(o.tasklist)) return o; for(const v of Object.values(o as any)){if(v&&typeof v==='object'){const r=f(v,d+1); if(r) return r;}} return null;}; const h:any=(j:any)=>{try{const c=f(j); if(c){w.__hcTask=c; try{console.log('[hcaptcha hook] '+c.request_type+' tasks='+c.tasklist.length);}catch{}}}catch{}}; try{const o=(w.fetch as any).bind(w); w.fetch=async(...a:any)=>{const r:Response=await o(...a); try{const u=String(a[0]||''); if(u.includes('hcaptcha')||u.includes('getcaptcha')) (r as any).clone().json().then(h).catch(()=>{});}catch{} return r;};}catch{} try{const X:any=XMLHttpRequest.prototype,oo=(X as any).open,os=(X as any).send; (X.open as any)=function(this:any,m:string,u:string){(this as any)._url=u; return oo.apply(this,arguments as any);}; (X.send as any)=function(this:any,b:any){ const self:any=this; self.addEventListener('load', ()=>{ try{const url=String(self._url||self.responseURL||''); if(url.includes('hcaptcha')||url.includes('getcaptcha')){try{h(JSON.parse(String(self.responseText||'')));}catch{}}}catch{}}); return os.call(self,b);};}catch{}} catch{}});
 	await context.addInitScript((t: string) => { try { localStorage.setItem('token', `"${t}"`); } catch {} }, token);
 		const page = await context.newPage();
@@ -70,20 +99,16 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 			const raw = j as any; const needCaptcha = raw?.captcha_key?.length && raw?.captcha_sitekey;
 			if (needCaptcha) {
 				console.warn(`[BrowserClaim] captcha required (browser, attempt ${attempt + 1}) sitekey=${raw.captcha_sitekey}`);
-				let solved: string | null = null; let tokenBlocked = false;
-				try { solved = await solveCaptcha(raw as any); } catch (e) {
-					// Token path removed — always fall through to Recognition/vision flow
-					tokenBlocked = true; console.warn(`[BrowserClaim] Token path unavailable -> Recognition/vision flow`);
+				if (usingExtension) {
+					// Extension path: NoneCap auto-solves inside iframe, poll for token
+					console.log(`[BrowserClaim] Extension mode — waiting for NoneCap to auto-solve...`);
+					const extOk = await tryExtensionSolve(page, raw, browserFetch, quest);
+					if (extOk) return true;
+					console.warn(`[BrowserClaim] Extension solve failed/timeout`); return false;
 				}
-				if (solved && !tokenBlocked) {
-					console.log(`[BrowserClaim] solved via Token, retrying...`);
-					const captchaHeaders: Record<string, string> = { 'x-captcha-key': solved, 'x-captcha-rqtoken': raw.captcha_rqtoken, 'x-captcha-session-id': raw.captcha_session_id, ...(raw.captcha_rqdata ? { 'x-captcha-rqdata': raw.captcha_rqdata } : {}) };
-					const res2 = await browserFetch(captchaHeaders);
-					if (res2.ok) { console.log(`[BrowserClaim] claimed after captcha (browser)`); quest.updateUserStatus(res2.json ?? ({ claimed_at: new Date().toISOString() } as any)); return true; }
-					const j2 = res2.json ?? {};
-					if (res2.status === 409 || j2?.code === 40010) { console.log(`[BrowserClaim] already claimed after captcha`); quest.updateUserStatus({ claimed_at: new Date().toISOString() } as any); return true; }
-					if (j2?.captcha_key?.length) { console.warn(`[BrowserClaim] captcha rejected, retrying...`); continue; }
-					console.error(`[BrowserClaim] failed after captcha: ${res2.status} ${res2.text.slice(0, 500)}`); continue;
+				let tokenBlocked = false;
+				try { await solveCaptcha(raw as any); } catch {
+					tokenBlocked = true; console.warn(`[BrowserClaim] Token path unavailable -> Recognition/vision flow`);
 				}
 				if (tokenBlocked) {
 					const recogOk = await tryRecognitionSolve(page, raw, browserFetch, quest);
@@ -107,6 +132,76 @@ async function claimWithToken(hcaptchaToken: string, captchaRaw: any, browserFet
 	if (res2.ok) { console.log(`[BrowserClaim][Recognition] claimed after solve`); quest.updateUserStatus(res2.json ?? ({ claimed_at: new Date().toISOString() } as any)); return true; }
 	const j2 = res2.json ?? {}; if (res2.status === 409 || j2?.code === 40010) { console.log(`[BrowserClaim][Recognition] already claimed`); quest.updateUserStatus({ claimed_at: new Date().toISOString() } as any); return true; }
 	console.error(`[BrowserClaim][Recognition] claim with token failed: ${res2.status} ${res2.text.slice(0, 500)}`); return false;
+}
+
+async function tryExtensionSolve(
+	page: any,
+	captchaRaw: any,
+	browserFetch: (h: Record<string, string>, b?: any) => Promise<{ status: number; ok: boolean; json: any; text: string }>,
+	quest: Quest,
+): Promise<boolean> {
+	// Extension (NoneCap) auto-solves hCaptcha inside iframe widget.
+	// We load the invisible widget, extension intercepts and solves it, then poll for the response token.
+	console.log(`[BrowserClaim][Extension] sitekey=${captchaRaw.captcha_sitekey} rqdata=${captchaRaw.captcha_rqdata ? 'yes' : 'no'}`);
+
+	const sitekey = captchaRaw.captcha_sitekey as string;
+	const rqdata = captchaRaw.captcha_rqdata as string | undefined;
+	const rqdataJson = rqdata ? JSON.stringify(rqdata) : 'null';
+
+	// Load hCaptcha widget
+	try {
+		await page.addScriptTag({ url: 'https://js.hcaptcha.com/1/api.js?render=explicit' } as any);
+		for (let i = 0; i < 50; i++) {
+			const ok = await page.evaluate('!!(window.hcaptcha && window.hcaptcha.render)').catch(() => false);
+			if (ok) break;
+			await page.waitForTimeout(200);
+		}
+		await page.evaluate(`(() => {
+			const w = window;
+			if (w.__hcaptchaInjected) return;
+			w.__hcaptchaInjected = true; w.__hcToken = '';
+			let div = document.getElementById('__hcaptcha_container');
+			if (!div) { div = document.createElement('div'); div.id = '__hcaptcha_container'; div.style.cssText = 'position:fixed;top:10px;left:10px;z-index:99999;background:white;padding:8px;'; document.body.appendChild(div); }
+			const opts = {
+				sitekey: ${JSON.stringify(sitekey)},
+				size: 'invisible',
+				theme: 'light',
+				callback: function(tok) { w.__hcToken = tok; console.log('[hcaptcha callback] token len=' + (tok && tok.length || 0)); },
+				'error-callback': function(e) { console.log('[hcaptcha error] ' + String(e)); },
+			};
+			const _rq = ${rqdataJson};
+			if (_rq) opts.rqdata = _rq;
+			const id = w.hcaptcha.render(div, opts);
+			w.__hcWidgetId = id;
+			// Give extension a moment to detect widget, then execute
+			setTimeout(() => { try { w.hcaptcha.execute(id); } catch(e) { console.log('[hcaptcha execute error] ' + e); } }, 800);
+		})()`).catch((e: any) => { throw e; });
+	} catch (e) {
+		console.warn(`[BrowserClaim][Extension] widget inject failed:`, e instanceof Error ? e.message : String(e));
+		return false;
+	}
+
+	// Poll for token up to 90s — extension should solve automatically
+	console.log(`[BrowserClaim][Extension] polling for token (max 90s)...`);
+	for (let i = 0; i < 90; i++) {
+		await page.waitForTimeout(1000);
+		try {
+			const tok: string = await page.evaluate(`(() => {
+				const w = window;
+				try { if (w.__hcToken) return w.__hcToken; } catch {}
+				try { const id = w.__hcWidgetId; if (id !== null && id !== undefined) { const t = w.hcaptcha.getResponse(id); if (t) return t; } } catch {}
+				try { return w.hcaptcha.getResponse() || ''; } catch {}
+				return '';
+			})()`).catch(() => '');
+			if (tok) {
+				console.log(`[BrowserClaim][Extension] token acquired len=${tok.length} after ${i + 1}s`);
+				return await claimWithToken(tok, captchaRaw, browserFetch, quest);
+			}
+		} catch {}
+		if (i % 15 === 14) console.log(`[BrowserClaim][Extension] waiting... ${i + 1}s`);
+	}
+	console.warn(`[BrowserClaim][Extension] timeout 90s — no token received. Extension installed? NoneCap configured?`);
+	return false;
 }
 
 async function tryRecognitionSolve(page: any, captchaRaw: any, browserFetch: (h: Record<string, string>, b?: any) => Promise<{ status: number; ok: boolean; json: any; text: string }>, quest: Quest): Promise<boolean> {
