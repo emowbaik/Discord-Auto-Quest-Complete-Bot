@@ -36,7 +36,7 @@ export class OpenAIVisionSolver {
 		const question = (task.requester_question && task.requester_question.en) || 'Select matching';
 		const prompt = getPrompt(reqType, question);
 		const images: Array<{type:"image_url";image_url:{url:string}}> = [];
-		for (const t of task.tasklist || []) { if (t.datapoint_uri) images.push({type:"image_url",image_url:{url:t.datapoint_uri}}); }
+		for (const t of task.tasklist || []) { const uris=[t.datapoint_uri,...(t.entities||[]).map((e:any)=>e.entity_uri||'')].filter(Boolean); for(const uri of uris){ try { const r=await fetch(uri); const b=Buffer.from(await r.arrayBuffer()); const ct=r.headers.get('content-type')||'image/jpeg'; images.push({type:"image_url",image_url:{url:'data:'+ct+';base64,'+b.toString('base64')}}); } catch(e){ console.warn('[OpenAIVision] img fetch fail '+String(e instanceof Error?e.message:e)); } } }
 		if (!images.length) throw new Error('No images in task');
 		const body = {model:this.model,messages:[{role:'user',content:[{type:'text',text:prompt},...images]}],max_tokens:2048,temperature:0.1};
 		const res = await fetch(this.baseUrl+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+this.apiKey},body:JSON.stringify(body)});
