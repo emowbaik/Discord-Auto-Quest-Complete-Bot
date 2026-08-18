@@ -72,9 +72,8 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 				console.warn(`[BrowserClaim] captcha required (browser, attempt ${attempt + 1}) sitekey=${raw.captcha_sitekey}`);
 				let solved: string | null = null; let tokenBlocked = false;
 				try { solved = await solveCaptcha(raw as any); } catch (e) {
-					const msg = e instanceof Error ? e.message : String(e);
-					if (/error 18|Feature unavailable|Reviewer/i.test(msg)) { tokenBlocked = true; console.warn(`[BrowserClaim] Token blocked (error 18) -> Recognition/invisible flow`); }
-					else { console.error(`[BrowserClaim] solve failed:`, msg); return false; }
+					// Token path removed — always fall through to Recognition/vision flow
+					tokenBlocked = true; console.warn(`[BrowserClaim] Token path unavailable -> Recognition/vision flow`);
 				}
 				if (solved && !tokenBlocked) {
 					console.log(`[BrowserClaim] solved via Token, retrying...`);
