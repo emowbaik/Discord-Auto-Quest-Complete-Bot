@@ -1,6 +1,6 @@
 import { solveCaptcha, solveHCaptchaRecognition } from './captcha';
 import type { Quest } from './quest';
-import type { HCaptchaTask } from './providers/nopechaRecognition';
+import type { HCaptchaTask } from './providers/openaiVision';
 import * as zlib from 'node:zlib';
 
 // Browser claim: invisible execute -> token auto (no quota) or visible -> Recognition image click (free 100/day).
@@ -236,7 +236,7 @@ if(!captured) { try{ const vis = await page.evaluate('(() => { try { const w:any
 	page.off('console', consoleHandler);
 	const task: HCaptchaTask = captured;
 	let result: any;
-	try { console.log(`[BrowserClaim][Recognition] task json ${JSON.stringify(task).slice(0, 2500)}`); console.log(`[BrowserClaim][Recognition] solving ${(task as any).request_type} via NopeCHA (${task.tasklist.length} tasks)...`); result = await solveHCaptchaRecognition(task); console.log(`[BrowserClaim][Recognition] result: ${JSON.stringify(result).slice(0, 500)}`); } catch (e) { console.error(`[BrowserClaim][Recognition] solve failed:`, e instanceof Error ? e.message : String(e)); console.warn(`[BrowserClaim][Recognition] NopeCHA free tier gagal (error 10 Invalid request). Kemungkinan: IP datacenter diblock free tier / challenge belum support / quota 100/hari habis.`); console.warn(`[BrowserClaim][Recognition] Fallback: tunggu solve manual di browser ${!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS==='false' ? '30s (silakan klik puzzle jika muncul)' : 'headless — set BROWSER_HEADLESS=false untuk manual'}`); // keep widget visible for manual
+	try { console.log(`[BrowserClaim][Recognition] task json ${JSON.stringify(task).slice(0, 2500)}`); console.log(`[BrowserClaim][Recognition] solving ${(task as any).request_type} via OpenAI Vision (${task.tasklist.length} tasks)...`); result = await solveHCaptchaRecognition(task); console.log(`[BrowserClaim][Recognition] result: ${JSON.stringify(result).slice(0, 500)}`); } catch (e) { console.error(`[BrowserClaim][Recognition] solve failed:`, e instanceof Error ? e.message : String(e)); console.warn(`[BrowserClaim][Recognition] Vision API gagal. Kemungkinan: API key invalid / endpoint down / model tidak support vision.`); console.warn(`[BrowserClaim][Recognition] Fallback: tunggu solve manual di browser ${!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS==='false' ? '30s (silakan klik puzzle jika muncul)' : 'headless — set BROWSER_HEADLESS=false untuk manual'}`); // keep widget visible for manual
 try{ await page.waitForTimeout(2000); }catch{}
 let manualTok=''; for(let w=0;w<60;w++){ try{ manualTok=await page.evaluate(`(id=>{const w=window; try{if(w.__hcToken) return w.__hcToken; try{const t=w.hcaptcha.getResponse(id); if(t) return t;}catch{} return w.hcaptcha.getResponse()||'';}catch{return ''}})(${JSON.stringify(widgetId)})`).catch(()=>''); if(manualTok){ console.log(`[BrowserClaim][Recognition] manual token len=${manualTok.length}`); page.off('response', handler); try{await page.unroute('**/getcaptcha**');}catch{} page.off('console', consoleHandler); return await claimWithToken(manualTok, captchaRaw, browserFetch, quest);} }catch{} await page.waitForTimeout(1000); if(w%10===9) console.log(`[BrowserClaim][Recognition] menunggu manual... ${w+1}s`); }
 page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } catch {} page.off('console', consoleHandler); return false; }
@@ -292,17 +292,17 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 	}
 	if (reqType === 'image_drag_drop' ) {
 		console.log(`[BrowserClaim][Recognition] ${reqType} result: ${JSON.stringify(result).slice(0, 600)}`);
-		// drag from entity coords -> NopeCHA answer, using playwright page.mouse (trusted CDP events)
+		// drag from entity coords -> Vision API answer, using playwright page.mouse (trusted CDP events)
 		let boxes:any[]=[]; if(Array.isArray(result)&&result.length){ if(Array.isArray(result[0])) boxes=result[0] as any[]; else if(result[0]&&typeof result[0]==='object'&&'x' in result[0]) boxes=result as any[]; }
 		const tasklist=(task as any).tasklist as any[]; const entityEnt=tasklist?.[0]?.entities?.[0]; const eCoords=entityEnt?.coords as number[]|undefined; const eSize=entityEnt?.size as number[]|undefined;
-		const b=boxes[0]||{x:250,y:250}; // NopeCHA answer normalized 0-500
+		const b=boxes[0]||{x:250,y:250}; // Vision API answer normalized 0-500
 		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
 		if(!fr) throw new Error('no challenge frame');
 		const bb:any=await fr.locator('canvas').first().boundingBox().catch(()=>null) || await fr.locator('[class*="image"] img, .challenge-image img, img').first().boundingBox().catch(()=>null);
 		if(bb){
 			const sx=(eCoords?.[0]??250), sy=(eCoords?.[1]??250);
-			// NopeCHA drag_drop returns x,y,w,h in 0-100 (percent), not 0-500. scale x5.
-			const ex=(b.x??50)*5, ey=(b.y??50)*5;
+			// Vision API drag_drop returns x,y in 0-500 directly.
+			const ex=b.x??250, ey=b.y??250;
 			const x1=bb.x+((sx+(eSize?.[0]??0)/2)/500)*bb.width, y1=bb.y+((sy+(eSize?.[1]??0)/2)/500)*bb.height;
 			const x2=bb.x+(clamp(ex)/500)*bb.width, y2=bb.y+(clamp(ey)/500)*bb.height;
 			console.log(`[BrowserClaim][Recognition] drag (${sx},${sy})->(${ex},${ey}) canvas ${JSON.stringify(bb)}`);

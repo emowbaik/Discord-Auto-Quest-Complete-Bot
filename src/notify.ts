@@ -166,7 +166,7 @@ export function notifyAccountReport(report: AccountReport): Promise<void[]> {
 		`👤 <b>${escapeHtml(report.account)}</b>`,
 		`  🎯 Completed: <b>${report.completed}</b>`,
 		`  🎁 Claimed: <b>${report.claimed}</b>`,
-		`  🔓 Auto-claim: <b>${report.claimSkipped ? 'Skipped — no NopeCHA key' : 'Enabled'}</b>`,
+		`  🔓 Auto-claim: <b>${report.claimSkipped ? 'Skipped — no Vision API key' : 'Enabled'}</b>`,
 		`  ⚡ Duration: <b>${report.durationSeconds}s</b>`,
 	];
 	if (report.error) telegramLines.push('', '🚨 <b>Error</b>', `<code>${escapeHtml(report.error)}</code>`);
@@ -175,7 +175,7 @@ export function notifyAccountReport(report: AccountReport): Promise<void[]> {
 		{ name: '👤 Account', value: escapeDiscord(report.account), inline: true },
 		{ name: '🎯 Completed', value: String(report.completed), inline: true },
 		{ name: '🎁 Claimed', value: String(report.claimed), inline: true },
-		{ name: '🔓 Auto-claim', value: report.claimSkipped ? 'Skipped — no NopeCHA key' : 'Enabled', inline: true },
+		{ name: '🔓 Auto-claim', value: report.claimSkipped ? 'Skipped — no Vision API key' : 'Enabled', inline: true },
 		{ name: '⚡ Duration', value: `${report.durationSeconds}s`, inline: true },
 	];
 	if (report.error) fields.push({ name: '🚨 Error', value: '```' + escapeDiscord(report.error.slice(0, 900)) + '```', inline: false }); // truncate to avoid embed limit
