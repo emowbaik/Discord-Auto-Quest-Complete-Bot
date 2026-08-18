@@ -8,7 +8,7 @@ import * as zlib from 'node:zlib';
 // 2. Vision API (OPENAI_BASE_URL set) — OpenAI-compatible vision provider, moderate success
 // 3. Manual fallback — visible browser, user solves, bot auto-claims
 
-const EXTENSION_PATH = process.env.BROWSER_EXTENSION_PATH || '';
+const EXTENSION_PATH = process.env.BROWSER_EXTENSION_PATH ? path.resolve(process.env.BROWSER_EXTENSION_PATH) : '';
 // Temp dir for each extension browser session (persistent context needs a dir)
 import * as fs from 'node:fs';
 import * as path from 'node:path';
