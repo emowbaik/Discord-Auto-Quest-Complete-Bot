@@ -17,9 +17,9 @@ export type HCaptchaRecognitionResult =
 	| Array<Array<{ entity_id: string; x: number; y: number; w: number; h: number }>>;
 
 function getPrompt(reqType: string, question: string): string {
-	if (reqType === 'image_drag_drop') return 'hCaptcha drag-drop. Instruction: ' + question + '. Return JSON with x(0-500),y(0-500),h,w. No markdown.';
-	if (reqType === 'image_label_area_select') return 'hCaptcha area-select. Return JSON array of points with x(0-500),y(0-500). No markdown.';
-	return 'hCaptcha binary-label. Return 2D boolean array. No markdown.';
+	if (reqType === 'image_drag_drop') return 'Look at the images. The task: "' + question + '". One small image is a draggable piece. Identify the CENTER (x,y) of the exact matching location/slot in the main background image where this piece must be dropped. Coordinates are in a 0-500 pixel grid. Return ONLY valid JSON: {"x": <0-500>, "y": <0-500>}. Be precise, examine the shapes/colors carefully. No markdown, no bbox arrays, single point only.';
+	if (reqType === 'image_label_area_select') return 'Look at the image. The task: "' + question + '". Identify the CENTER (x,y) of EVERY object matching the instruction, in a 0-500 pixel grid. Return ONLY a JSON array: [{"x": <0-500>, "y": <0-500>}, ...]. One entry per matching object. No markdown.';
+	return 'Look at the image grid. The task: "' + question + '". For each tile (left-to-right, top-to-bottom), answer true if it matches the instruction, false otherwise. Return ONLY a 2D boolean array matching the grid layout: [[true,false],[false,true]]. No markdown.';
 }
 
 export class OpenAIVisionSolver {
