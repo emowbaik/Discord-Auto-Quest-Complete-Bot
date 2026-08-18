@@ -305,9 +305,27 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 			const x1=bb.x+((sx+(eSize?.[0]??0)/2)/500)*bb.width, y1=bb.y+((sy+(eSize?.[1]??0)/2)/500)*bb.height;
 			const x2=bb.x+(clamp(ex)/500)*bb.width, y2=bb.y+(clamp(ey)/500)*bb.height;
 			console.log(`[BrowserClaim][Recognition] drag (${sx},${sy})->(${ex},${ey}) canvas ${JSON.stringify(bb)}`);
-			await page.mouse.move(x1,y1,{steps:4});
+			// human-like drag: ease-in-out velocity, slight curve, jitter, variable timing
+			const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
+			await page.mouse.move(x1+rnd(-1,1), y1+rnd(-1,1) ,{steps: rnd(3,6)});
+			await page.waitForTimeout(rnd(60,140));
 			await page.mouse.down();
-			for(let i=1;i<=8;i++){ await page.mouse.move(x1+(x2-x1)*i/8, y1+(y2-y1)*i/8,{steps:2}); await page.waitForTimeout(40); }
+			await page.waitForTimeout(rnd(80,180)); // human pause before moving
+			const N=Math.round(rnd(14,22));
+			// control point for slight arc (perpendicular offset)
+			const mx=(x1+x2)/2+rnd(-40,40), my=(y1+y2)/2+rnd(-25,25);
+			for(let i=1;i<=N;i++){
+				const t=i/N;
+				// bezier quadratic: p = (1-t)^2*P0 + 2(1-t)t*PC + t^2*P2
+				const bx=(1-t)*(1-t)*x1+2*(1-t)*t*mx+t*t*x2;
+				const by=(1-t)*(1-t)*y1+2*(1-t)*t*my+t*t*y2;
+				await page.mouse.move(bx+rnd(-0.8,0.8), by+rnd(-0.8,0.8),{steps:1});
+				// ease: slower at start & end (human accel/decel)
+				const speed = t<0.5 ? (1-2*t)*60+120 : (2*(t-0.5))*60+120; // 180 -> 120 -> 180
+				await page.waitForTimeout(rnd(speed*0.7, speed*1.3));
+			}
+			await page.mouse.move(x2+rnd(-1,1), y2+rnd(-1,1),{steps:2});
+			await page.waitForTimeout(rnd(120,220));
 			await page.mouse.up();
 			await page.waitForTimeout(800);
 			// debug iframe
