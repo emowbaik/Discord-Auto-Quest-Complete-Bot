@@ -307,7 +307,7 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 			console.log(`[BrowserClaim][Recognition] drag (${sx},${sy})->(${ex},${ey}) canvas ${JSON.stringify(bb)}`);
 			// human-like drag: ease-in-out velocity, slight curve, jitter, variable timing
 			const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
-			await page.mouse.move(x1+rnd(-1,1), y1+rnd(-1,1) ,{steps: rnd(3,6)});
+			await page.mouse.move(x1+rnd(-1,1), y1+rnd(-1,1) ,{steps: Math.round(rnd(3,6))});
 			await page.waitForTimeout(rnd(60,140));
 			await page.mouse.down();
 			await page.waitForTimeout(rnd(80,180)); // human pause before moving
