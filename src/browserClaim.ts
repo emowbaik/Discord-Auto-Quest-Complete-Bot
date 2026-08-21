@@ -291,13 +291,8 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
 		if(!fr) throw new Error('no challenge frame');
 		// Use getBoundingClientRect from INSIDE the iframe (relative to iframe viewport) for accurate coords
-		const iframeDims: any = await fr.evaluate(() => {
-			const c = document.querySelector('canvas') as HTMLCanvasElement | null;
-			const el = c || document.querySelector('.task-image, [class*="challenge-image"] img, img') as HTMLElement | null;
-			if (!el) return null;
-			const r = el.getBoundingClientRect();
-			return { left: r.left, top: r.top, width: r.width, height: r.height, cw: (el as any).width || r.width, ch: (el as any).height || r.height };
-		}).catch(() => null);
+		// String-based evaluate avoids tsx __name helper injection
+		const iframeDims: any = await fr.evaluate('(() => { const c = document.querySelector("canvas"); const el = c || document.querySelector(".task-image, img"); if (!el) return null; const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, cw: el.width || r.width, ch: el.height || r.height }; })()').catch(() => null);
 		if (!iframeDims) throw new Error('no iframe canvas dims');
 		const sx = (eCoords?.[0] ?? 250), sy = (eCoords?.[1] ?? 250);
 		const ex = b.x ?? 250, ey = b.y ?? 250;
@@ -307,7 +302,7 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const x2 = iframeDims.left + (clamp(ex) / 500) * iframeDims.width;
 		const y2 = iframeDims.top  + (clamp(ey) / 500) * iframeDims.height;
 		console.log(`[BrowserClaim][Recognition] iframe-synthetic drag (${sx},${sy})->(${ex},${ey}) iframeDims=${JSON.stringify(iframeDims)}`);
-		// Build bezier trajectory points inside JS (N steps)
+		// Build bezier trajectory points in Node context (N steps)
 		const N = 18;
 		const mcx = (x1 + x2) / 2 + (Math.random() - 0.5) * 60;
 		const mcy = (y1 + y2) / 2 + (Math.random() - 0.5) * 40;
@@ -319,77 +314,63 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 				y: (1-t)*(1-t)*y1 + 2*(1-t)*t*mcy + t*t*y2 + (Math.random()-0.5)*1.2,
 			});
 		}
-		// Dispatch synthetic PointerEvent + MouseEvent sequence from INSIDE hCaptcha iframe context.
-		// Events originating in iframe context pass hCaptcha motionData/hsw verification (same as extension).
-		await fr.evaluate(({ sx1, sy1, ex2, ey2, pts: trajectory }: any) => {
-			const rnd = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
-			const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-			const fire = (el: Element, type: string, cx: number, cy: number, extra: any = {}) => {
-				const isPE = type.startsWith('pointer');
-				const opts: any = {
-					bubbles: true, cancelable: true,
-					clientX: cx, clientY: cy,
-					screenX: cx, screenY: cy,
-					button: 0, buttons: extra.up ? 0 : 1,
-					...extra,
-				};
-				if (isPE) { opts.pointerType = 'mouse'; opts.pointerId = 1; }
-				el.dispatchEvent(isPE ? new PointerEvent(type, opts) : new MouseEvent(type, opts));
+		// Dispatch synthetic PointerEvent + MouseEvent from INSIDE iframe context via string evaluate.
+		// String eval avoids tsx __name injection. Data embedded via JSON.stringify.
+		// Events originating in iframe context pass hCaptcha motionData/hsw (same as extension content.js).
+		const dragScript = `(function(sx1,sy1,ex2,ey2,trajectory){
+			var rnd=function(lo,hi){return lo+Math.random()*(hi-lo);};
+			var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};
+			var fire=function(el,type,cx,cy,isUp){
+				var isPE=type.indexOf('pointer')===0;
+				var opts={bubbles:true,cancelable:true,clientX:cx,clientY:cy,screenX:cx,screenY:cy,button:0,buttons:isUp?0:1};
+				if(isPE){opts.pointerType='mouse';opts.pointerId=1;}
+				var ev=isPE?new PointerEvent(type,opts):new MouseEvent(type,opts);
+				el.dispatchEvent(ev);
 			};
-			return (async () => {
-				const canvas = document.querySelector('canvas') as HTMLElement || document.querySelector('.task-image, img') as HTMLElement;
-				if (!canvas) return;
-				const getEl = (cx: number, cy: number) => (document.elementFromPoint(cx, cy) as HTMLElement) || canvas;
-				// --- pointerover / mouseenter on start ---
-				fire(canvas, 'pointerover', sx1, sy1);
-				fire(canvas, 'pointerenter', sx1, sy1, { bubbles: false });
-				fire(canvas, 'mouseover', sx1, sy1);
-				fire(canvas, 'mouseenter', sx1, sy1, { bubbles: false });
-				fire(canvas, 'mousemove', sx1, sy1);
-				await sleep(rnd(50, 120));
-				// --- pointerdown / mousedown ---
-				let el = getEl(sx1, sy1);
-				fire(el, 'pointerdown', sx1, sy1);
-				fire(el, 'mousedown', sx1, sy1);
-				await sleep(rnd(60, 130));
-				// --- trajectory: pointermove / mousemove per step ---
-				for (const pt of trajectory) {
-					const mel = getEl(pt.x, pt.y);
-					fire(mel, 'pointermove', pt.x, pt.y);
-					fire(mel, 'mousemove', pt.x, pt.y);
-					const t = trajectory.indexOf(pt) / trajectory.length;
-					const delay = t < 0.5 ? rnd(60, 110) : rnd(40, 80);
+			return (async function(){
+				var canvas=document.querySelector('canvas')||document.querySelector('.task-image,img');
+				if(!canvas)return;
+				var getEl=function(cx,cy){return document.elementFromPoint(cx,cy)||canvas;};
+				fire(canvas,'pointerover',sx1,sy1,false);
+				fire(canvas,'mouseover',sx1,sy1,false);
+				fire(canvas,'mousemove',sx1,sy1,false);
+				await sleep(rnd(50,120));
+				var el=getEl(sx1,sy1);
+				fire(el,'pointerdown',sx1,sy1,false);
+				fire(el,'mousedown',sx1,sy1,false);
+				await sleep(rnd(60,130));
+				for(var i=0;i<trajectory.length;i++){
+					var pt=trajectory[i];
+					var mel=getEl(pt.x,pt.y);
+					fire(mel,'pointermove',pt.x,pt.y,false);
+					fire(mel,'mousemove',pt.x,pt.y,false);
+					var delay=i/trajectory.length<0.5?rnd(60,110):rnd(40,80);
 					await sleep(delay);
 				}
-				// --- pointerup / mouseup / click at destination ---
-				const el2 = getEl(ex2, ey2);
-				fire(el2, 'pointermove', ex2, ey2);
-				fire(el2, 'mousemove', ex2, ey2);
-				await sleep(rnd(80, 160));
-				fire(el2, 'pointerup', ex2, ey2, { up: true });
-				fire(el2, 'mouseup', ex2, ey2, { up: true });
-				fire(el2, 'click', ex2, ey2);
+				var el2=getEl(ex2,ey2);
+				fire(el2,'pointermove',ex2,ey2,false);
+				fire(el2,'mousemove',ex2,ey2,false);
+				await sleep(rnd(80,160));
+				fire(el2,'pointerup',ex2,ey2,true);
+				fire(el2,'mouseup',ex2,ey2,true);
+				fire(el2,'click',ex2,ey2,false);
 			})();
-		}, { sx1: x1, sy1: y1, ex2: x2, ey2: y2, pts });
+		})(${x1},${y1},${x2},${y2},${JSON.stringify(pts)})`;
+		await fr.evaluate(dragScript).catch((e: any) => console.warn(`[BrowserClaim][Recognition] drag eval err: ${e?.message}`));
 		await page.waitForTimeout(900);
 		// debug iframe body after drag
 		try {
-			const dbg2: any = await fr.evaluate(() => {
-				const buts = [...document.querySelectorAll('button,[role="button"],[class*="button"],[class*="submit"]')].map(b => ({ t: (b.textContent || '').trim().slice(0, 15), c: (b.className || '').toString().slice(0, 30) }));
-				return { body: (document.body?.innerText || '').slice(0, 150), buttons: buts.slice(0, 8), sub: !!document.querySelector('[class*="button-submit"],[class*="submit"]') };
-			}).catch(() => null);
+			const dbg2: any = await fr.evaluate('(() => { var buts=[...document.querySelectorAll("button,[role=\'button\'],[class*=\'button\'],[class*=\'submit\']")].map(function(b){return{t:(b.textContent||"").trim().slice(0,15),c:(b.className||"").toString().slice(0,30)};}); return {body:(document.body&&document.body.innerText||"").slice(0,150),buttons:buts.slice(0,8),sub:!!document.querySelector("[class*=\'button-submit\'],[class*=\'submit\']")}; })()').catch(() => null);
 			if (dbg2) console.log(`[BrowserClaim][Recognition] iframe dbg post-drag ${JSON.stringify(dbg2).slice(0, 900)}`);
 		} catch {}
-		// Submit
+		// Submit via string evaluate
 		try {
-			await fr.evaluate(() => {
-				const btn = document.querySelector('[class*="button-submit"], .button-submit, button[type="submit"]') as HTMLElement | null;
-				if (btn) btn.click();
-			});
+			await fr.evaluate('(() => { var btn=document.querySelector("[class*=\'button-submit\'],.button-submit,button[type=\'submit\']"); if(btn) btn.click(); })()');
 		} catch {}
 		await page.waitForTimeout(3000);
 		return;
 	}
+
 	if (reqType === 'image_label_area_select') {
 		// Result is array of {x,y,w,h} or {x,y} per task. Use coords to compute clicks/drags inside challenge iframe.
 		// For now click center of each returned box — hCaptcha accepts click for area_select, drag for drag_drop may need drag.
