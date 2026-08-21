@@ -283,56 +283,112 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		try { if (challengeFrame.evaluate) await challengeFrame.evaluate(() => { const b = (document.querySelector('[class*="button-submit"]') ?? document.querySelector('div.button-submit') ?? document.querySelector('button[type="submit"]')) as HTMLElement | null; if (b) b.click(); }); else await challengeFrame.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
 		await page.waitForTimeout(1500); return;
 	}
-	if (reqType === 'image_drag_drop' ) {
+	if (reqType === 'image_drag_drop') {
 		console.log(`[BrowserClaim][Recognition] ${reqType} result: ${JSON.stringify(result).slice(0, 600)}`);
-		// drag from entity coords -> Vision API answer, using playwright page.mouse (trusted CDP events)
 		let boxes:any[]=[]; if(Array.isArray(result)&&result.length){ if(Array.isArray(result[0])) boxes=result[0] as any[]; else if(result[0]&&typeof result[0]==='object'&&'x' in result[0]) boxes=result as any[]; }
 		const tasklist=(task as any).tasklist as any[]; const entityEnt=tasklist?.[0]?.entities?.[0]; const eCoords=entityEnt?.coords as number[]|undefined; const eSize=entityEnt?.size as number[]|undefined;
-		const b=boxes[0]||{x:250,y:250}; // Vision API answer normalized 0-500
+		const b=boxes[0]||{x:250,y:250};
 		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
 		if(!fr) throw new Error('no challenge frame');
-		const bb:any=await fr.locator('canvas').first().boundingBox().catch(()=>null) || await fr.locator('[class*="image"] img, .challenge-image img, img').first().boundingBox().catch(()=>null);
-		if(bb){
-			const sx=(eCoords?.[0]??250), sy=(eCoords?.[1]??250);
-			// Vision API drag_drop returns x,y in 0-500 directly.
-			const ex=b.x??250, ey=b.y??250;
-			const x1=bb.x+((sx+(eSize?.[0]??0)/2)/500)*bb.width, y1=bb.y+((sy+(eSize?.[1]??0)/2)/500)*bb.height;
-			const x2=bb.x+(clamp(ex)/500)*bb.width, y2=bb.y+(clamp(ey)/500)*bb.height;
-			console.log(`[BrowserClaim][Recognition] drag (${sx},${sy})->(${ex},${ey}) canvas ${JSON.stringify(bb)}`);
-			// human-like drag: ease-in-out velocity, slight curve, jitter, variable timing
-			const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
-			await page.mouse.move(x1+rnd(-1,1), y1+rnd(-1,1) ,{steps: Math.round(rnd(3,6))});
-			await page.waitForTimeout(rnd(60,140));
-			await page.mouse.down();
-			await page.waitForTimeout(rnd(80,180)); // human pause before moving
-			const N=Math.round(rnd(14,22));
-			// control point for slight arc (perpendicular offset)
-			const mx=(x1+x2)/2+rnd(-40,40), my=(y1+y2)/2+rnd(-25,25);
-			for(let i=1;i<=N;i++){
-				const t=i/N;
-				// bezier quadratic: p = (1-t)^2*P0 + 2(1-t)t*PC + t^2*P2
-				const bx=(1-t)*(1-t)*x1+2*(1-t)*t*mx+t*t*x2;
-				const by=(1-t)*(1-t)*y1+2*(1-t)*t*my+t*t*y2;
-				await page.mouse.move(bx+rnd(-0.8,0.8), by+rnd(-0.8,0.8),{steps:1});
-				// ease: slower at start & end (human accel/decel)
-				const speed = t<0.5 ? (1-2*t)*60+120 : (2*(t-0.5))*60+120; // 180 -> 120 -> 180
-				await page.waitForTimeout(rnd(speed*0.7, speed*1.3));
-			}
-			await page.mouse.move(x2+rnd(-1,1), y2+rnd(-1,1),{steps:2});
-			await page.waitForTimeout(rnd(120,220));
-			await page.mouse.up();
-			await page.waitForTimeout(800);
-			// debug iframe
-			try{ const dbg2:any=await fr.evaluate(()=>{ const buts=[...document.querySelectorAll('button,[role="button"],[class*="button"],[class*="submit"]')].map(b=>({t:(b.textContent||'').trim().slice(0,15),c:(b.className||'').toString().slice(0,30),id:b.id,v:getComputedStyle(b).visibility})); return {body:(document.body?.innerText||'').slice(0,120),buttons:buts.slice(0,12),sub:!!document.querySelector('[class*="button-submit"],[class*="submit"]')}; }).catch(()=>null); if(dbg2) console.log(`[BrowserClaim][Recognition] iframe dbg ${JSON.stringify(dbg2).slice(0,900)}`); }catch{}
-			try{
-				const sbb:any=await fr.locator('[class*="button-submit"], .button-submit, button[type="submit"]').first().boundingBox().catch(()=>null);
-				if(sbb){ await page.mouse.move(sbb.x+sbb.width/2, sbb.y+sbb.height/2,{steps:3}); await page.mouse.down(); await page.waitForTimeout(90); await page.mouse.up(); console.log(`[BrowserClaim][Recognition] real submit at ${JSON.stringify(sbb)}`); }
-				else { await fr.evaluate(()=>{ const b=document.querySelector('[class*="button-submit"], .button-submit, button[type="submit"]') as HTMLElement|null; if(b) (b as any).click(); }); }
-			}catch{}
-			await page.waitForTimeout(3000);
-			return;
+		// Use getBoundingClientRect from INSIDE the iframe (relative to iframe viewport) for accurate coords
+		const iframeDims: any = await fr.evaluate(() => {
+			const c = document.querySelector('canvas') as HTMLCanvasElement | null;
+			const el = c || document.querySelector('.task-image, [class*="challenge-image"] img, img') as HTMLElement | null;
+			if (!el) return null;
+			const r = el.getBoundingClientRect();
+			return { left: r.left, top: r.top, width: r.width, height: r.height, cw: (el as any).width || r.width, ch: (el as any).height || r.height };
+		}).catch(() => null);
+		if (!iframeDims) throw new Error('no iframe canvas dims');
+		const sx = (eCoords?.[0] ?? 250), sy = (eCoords?.[1] ?? 250);
+		const ex = b.x ?? 250, ey = b.y ?? 250;
+		// Convert 0-500 to iframe-local clientX/clientY (getBoundingClientRect inside iframe)
+		const x1 = iframeDims.left + ((sx + (eSize?.[0] ?? 0) / 2) / 500) * iframeDims.width;
+		const y1 = iframeDims.top  + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * iframeDims.height;
+		const x2 = iframeDims.left + (clamp(ex) / 500) * iframeDims.width;
+		const y2 = iframeDims.top  + (clamp(ey) / 500) * iframeDims.height;
+		console.log(`[BrowserClaim][Recognition] iframe-synthetic drag (${sx},${sy})->(${ex},${ey}) iframeDims=${JSON.stringify(iframeDims)}`);
+		// Build bezier trajectory points inside JS (N steps)
+		const N = 18;
+		const mcx = (x1 + x2) / 2 + (Math.random() - 0.5) * 60;
+		const mcy = (y1 + y2) / 2 + (Math.random() - 0.5) * 40;
+		const pts: Array<{x:number,y:number}> = [];
+		for (let i = 1; i <= N; i++) {
+			const t = i / N;
+			pts.push({
+				x: (1-t)*(1-t)*x1 + 2*(1-t)*t*mcx + t*t*x2 + (Math.random()-0.5)*1.2,
+				y: (1-t)*(1-t)*y1 + 2*(1-t)*t*mcy + t*t*y2 + (Math.random()-0.5)*1.2,
+			});
 		}
-		throw new Error('no canvas boundingBox for drag');
+		// Dispatch synthetic PointerEvent + MouseEvent sequence from INSIDE hCaptcha iframe context.
+		// Events originating in iframe context pass hCaptcha motionData/hsw verification (same as extension).
+		await fr.evaluate(({ sx1, sy1, ex2, ey2, pts: trajectory }: any) => {
+			const rnd = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
+			const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+			const fire = (el: Element, type: string, cx: number, cy: number, extra: any = {}) => {
+				const isPE = type.startsWith('pointer');
+				const opts: any = {
+					bubbles: true, cancelable: true,
+					clientX: cx, clientY: cy,
+					screenX: cx, screenY: cy,
+					button: 0, buttons: extra.up ? 0 : 1,
+					...extra,
+				};
+				if (isPE) { opts.pointerType = 'mouse'; opts.pointerId = 1; }
+				el.dispatchEvent(isPE ? new PointerEvent(type, opts) : new MouseEvent(type, opts));
+			};
+			return (async () => {
+				const canvas = document.querySelector('canvas') as HTMLElement || document.querySelector('.task-image, img') as HTMLElement;
+				if (!canvas) return;
+				const getEl = (cx: number, cy: number) => (document.elementFromPoint(cx, cy) as HTMLElement) || canvas;
+				// --- pointerover / mouseenter on start ---
+				fire(canvas, 'pointerover', sx1, sy1);
+				fire(canvas, 'pointerenter', sx1, sy1, { bubbles: false });
+				fire(canvas, 'mouseover', sx1, sy1);
+				fire(canvas, 'mouseenter', sx1, sy1, { bubbles: false });
+				fire(canvas, 'mousemove', sx1, sy1);
+				await sleep(rnd(50, 120));
+				// --- pointerdown / mousedown ---
+				let el = getEl(sx1, sy1);
+				fire(el, 'pointerdown', sx1, sy1);
+				fire(el, 'mousedown', sx1, sy1);
+				await sleep(rnd(60, 130));
+				// --- trajectory: pointermove / mousemove per step ---
+				for (const pt of trajectory) {
+					const mel = getEl(pt.x, pt.y);
+					fire(mel, 'pointermove', pt.x, pt.y);
+					fire(mel, 'mousemove', pt.x, pt.y);
+					const t = trajectory.indexOf(pt) / trajectory.length;
+					const delay = t < 0.5 ? rnd(60, 110) : rnd(40, 80);
+					await sleep(delay);
+				}
+				// --- pointerup / mouseup / click at destination ---
+				const el2 = getEl(ex2, ey2);
+				fire(el2, 'pointermove', ex2, ey2);
+				fire(el2, 'mousemove', ex2, ey2);
+				await sleep(rnd(80, 160));
+				fire(el2, 'pointerup', ex2, ey2, { up: true });
+				fire(el2, 'mouseup', ex2, ey2, { up: true });
+				fire(el2, 'click', ex2, ey2);
+			})();
+		}, { sx1: x1, sy1: y1, ex2: x2, ey2: y2, pts });
+		await page.waitForTimeout(900);
+		// debug iframe body after drag
+		try {
+			const dbg2: any = await fr.evaluate(() => {
+				const buts = [...document.querySelectorAll('button,[role="button"],[class*="button"],[class*="submit"]')].map(b => ({ t: (b.textContent || '').trim().slice(0, 15), c: (b.className || '').toString().slice(0, 30) }));
+				return { body: (document.body?.innerText || '').slice(0, 150), buttons: buts.slice(0, 8), sub: !!document.querySelector('[class*="button-submit"],[class*="submit"]') };
+			}).catch(() => null);
+			if (dbg2) console.log(`[BrowserClaim][Recognition] iframe dbg post-drag ${JSON.stringify(dbg2).slice(0, 900)}`);
+		} catch {}
+		// Submit
+		try {
+			await fr.evaluate(() => {
+				const btn = document.querySelector('[class*="button-submit"], .button-submit, button[type="submit"]') as HTMLElement | null;
+				if (btn) btn.click();
+			});
+		} catch {}
+		await page.waitForTimeout(3000);
+		return;
 	}
 	if (reqType === 'image_label_area_select') {
 		// Result is array of {x,y,w,h} or {x,y} per task. Use coords to compute clicks/drags inside challenge iframe.
