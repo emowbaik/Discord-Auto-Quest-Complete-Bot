@@ -16,10 +16,14 @@ export type HCaptchaRecognitionResult =
 	| Array<Array<{ x: number; y: number; w: number; h: number }>>
 	| Array<Array<{ entity_id: string; x: number; y: number; w: number; h: number }>>;
 
-function getPrompt(reqType: string, question: string): string {
-	if (reqType === 'image_drag_drop') return 'Look at the images. The task: "' + question + '". One small image is a draggable piece. Identify the CENTER (x,y) of the exact matching location/slot in the main background image where this piece must be dropped. Coordinates are in a 0-500 pixel grid. Return ONLY valid JSON: {"x": <0-500>, "y": <0-500>}. Be precise, examine the shapes/colors carefully. No markdown, no bbox arrays, single point only.';
-	if (reqType === 'image_label_area_select') return 'Look at the image. The task: "' + question + '". Identify the CENTER (x,y) of EVERY object matching the instruction, in a 0-500 pixel grid. Return ONLY a JSON array: [{"x": <0-500>, "y": <0-500>}, ...]. One entry per matching object. No markdown.';
-	return 'Look at the image grid. The task: "' + question + '". For each tile (left-to-right, top-to-bottom), answer true if it matches the instruction, false otherwise. Return ONLY a 2D boolean array matching the grid layout: [[true,false],[false,true]]. No markdown.';
+const SYSTEM_PROMPT_GRID = 'You are an hCaptcha solver. You will receive images from an hCaptcha challenge grid.\nThe user message contains the challenge instruction (e.g. "Click all images containing a cat").\nAnalyze each image and return ONLY a JSON array of zero-based indices for images that match the instruction.\nExample response: [0, 2, 5]\nIf no images match, return an empty array: []\nDo NOT include any explanation or text outside the JSON array.';
+
+const SYSTEM_PROMPT_AREA = 'You are an hCaptcha solver. You will receive one or more images of an hCaptcha challenge.\nIf multiple images are provided, they are sequential frames of an ANIMATED challenge captured ~180ms apart — use them to determine motion (which object moves, which is fastest/highest/brightest, etc.).\nThe instruction tells you what to click.\nReturn ONLY valid JSON — no explanation:\n- Single click: {"x": 0.42, "y": 0.31}\n- Multiple clicks: [{"x": 0.2, "y": 0.3}, {"x": 0.7, "y": 0.5}]\nAll coordinates are normalized 0.0-1.0 relative to the image dimensions (x=left→right, y=top→bottom).';
+
+function getPrompt(reqType: string, question: string): { system: string; user: string } {
+	if (reqType === 'image_drag_drop') return { system: SYSTEM_PROMPT_AREA, user: question || 'Drag the element to where it fits.' };
+	if (reqType === 'image_label_area_select') return { system: SYSTEM_PROMPT_AREA, user: question || 'Select all matching areas.' };
+	return { system: SYSTEM_PROMPT_GRID, user: question || 'Select all matching images.' };
 }
 
 export class OpenAIVisionSolver {
@@ -34,15 +38,17 @@ export class OpenAIVisionSolver {
 	async solve(task: HCaptchaTask): Promise<HCaptchaRecognitionResult> {
 		const reqType = task.request_type || 'image_label_binary';
 		const question = (task.requester_question && task.requester_question.en) || 'Select matching';
-		const prompt = getPrompt(reqType, question);
+		const { system, user } = getPrompt(reqType, question);
 		const images: Array<{type:"image_url";image_url:{url:string}}> = [];
 		for (const t of task.tasklist || []) { const uris=[t.datapoint_uri,...(t.entities||[]).map((e:any)=>e.entity_uri||'')].filter(Boolean); for(const uri of uris){ try { const r=await fetch(uri); const b=Buffer.from(await r.arrayBuffer()); const ct=r.headers.get('content-type')||'image/jpeg'; images.push({type:"image_url",image_url:{url:'data:'+ct+';base64,'+b.toString('base64')}}); } catch(e){ console.warn('[OpenAIVision] img fetch fail '+String(e instanceof Error?e.message:e)); } } }
 		if (!images.length) throw new Error('No images in task');
-		const body = {model:this.model,messages:[{role:'user',content:[{type:'text',text:prompt},...images]}],max_tokens:2048,temperature:0.1};
+		const body = {model:this.model,messages:[{role:'system',content:system},{role:'user',content:[{type:'text',text:user},...images]}],max_tokens:2048,temperature:0};
 		const res = await fetch(this.baseUrl+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+this.apiKey},body:JSON.stringify(body)});
 		if (!res.ok) { const txt = await res.text(); throw new Error('Vision API '+res.status+': '+txt.slice(0,300)); }
 		const data = await res.json() as any;
-		const raw = (data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+		let raw = (data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+		// ponytail: reasoning models put answer in reasoning_content when tokens exhausted
+		if (!raw) raw = (data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.reasoning_content)||'';
 		return this.parse(reqType, raw, task);
 	}
 	private parse(reqType: string, raw: string, task: HCaptchaTask): HCaptchaRecognitionResult {
@@ -50,8 +56,15 @@ export class OpenAIVisionSolver {
 		let parsed: any;
 		try { parsed = JSON.parse(cleaned); } catch { let si = cleaned.indexOf('{'); if (si === -1) si = cleaned.indexOf('['); if (si === -1) throw new Error('Non-JSON: ' + raw.slice(0, 200)); parsed = JSON.parse(cleaned.slice(si)); }
 		if (reqType==='image_label_binary') { if (!Array.isArray(parsed)) throw new Error('Expected 2D bool'); return parsed; }
-		if (reqType==='image_drag_drop') { const eid=(task.tasklist&&task.tasklist[0]&&task.tasklist[0].task_key)||'e0'; if (typeof parsed.x!=='number') throw new Error('Missing x'); return [[{entity_id:eid,x:Number(parsed.x),y:Number(parsed.y),w:Number(parsed.w||20),h:Number(parsed.h||20)}]]; }
+		// Normalized 0.0-1.0 coords -> scale to 0-500 for browserClaim compatibility
+		const clamp01 = (n: number) => Math.max(0, Math.min(1, Number(n) || 0));
+		const scale = (n: number) => Math.round(clamp01(n) * 500);
+		if (reqType==='image_drag_drop') {
+			const eid=(task.tasklist&&task.tasklist[0]&&task.tasklist[0].task_key)||'e0';
+			if (typeof parsed.x!=='number') throw new Error('Missing x');
+			return [[{entity_id:eid,x:scale(parsed.x),y:scale(parsed.y),w:20,h:20}]];
+		}
 		if (!Array.isArray(parsed)) throw new Error('Expected array');
-		return [parsed.map((p:any)=>({x:Number(p.x),y:Number(p.y),w:Number(p.w||0),h:Number(p.h||0)}))];
+		return [parsed.map((p:any)=>({x:scale(p.x),y:scale(p.y),w:Number(p.w||0),h:Number(p.h||0)}))];
 	}
 }
