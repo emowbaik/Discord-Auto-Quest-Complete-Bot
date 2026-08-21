@@ -21,7 +21,12 @@ export async function claimViaBrowser(token: string, quest: Quest): Promise<bool
 		const headless = process.env.BROWSER_HEADLESS !== 'false';
 		browser = await chromium.launch({
 			headless,
-			args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled'],
+			args: [
+				'--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+				'--disable-blink-features=AutomationControlled',
+				'--disable-features=ProtocolHandlerPermissionRequest',
+				'--disable-external-intent-requests',
+			],
 		});
 		const context = await browser.newContext({
 			locale: 'en-US',
