@@ -290,32 +290,32 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const b=boxes[0]||{x:250,y:250};
 		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
 		if(!fr) throw new Error('no challenge frame');
-		// CDP trusted-event strategy: synthetic dispatchEvent has isTrusted=false and hCaptcha ignores it,
-		// so use page.mouse (real input pipeline) preceded by human-like warmup motion to build
-		// plausible motionData history before the actual drag.
-		// 1. Find the hcaptcha challenge iframe element on the parent page -> page-level bounding box
-		const iframeBox: any = await page.evaluate(`(() => {
-			var iframes = document.querySelectorAll('iframe');
-			for (var i = 0; i < iframes.length; i++) {
-				var f = iframes[i];
-				if ((f.src || '').indexOf('hcaptcha.com/captcha') !== -1) {
-					var r = f.getBoundingClientRect();
-					return { left: r.left, top: r.top, width: r.width, height: r.height };
-				}
-			}
-			return null;
-		})()`).catch(() => null);
-		if (!iframeBox) throw new Error('no hcaptcha iframe element found');
+		// DIAGNOSTIC: log ALL iframes whose src mentions hcaptcha (anchor vs challenge vs hidden dupes)
+		try {
+			const allIframes: any = await page.evaluate(`(() => {
+				var out=[];
+				document.querySelectorAll('iframe').forEach(function(f){
+					if((f.src||'').indexOf('hcaptcha')!==-1){
+						var r=f.getBoundingClientRect();
+						out.push({src:f.src.slice(0,80),l:Math.round(r.left),t:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height)});
+					}
+				});
+				return out;
+			})()`);
+			console.log(`[BrowserClaim][Recognition] all hcaptcha iframes: ${JSON.stringify(allIframes)}`);
+		} catch {}
+		// SINGLE COORDINATE SOURCE: canvas boundingBox from the challenge frame (Playwright resolves
+		// through nested frames into main-viewport coords). Proven to move pieces visually.
+		const bb:any=await fr.locator('canvas').first().boundingBox().catch(()=>null);
+		if(!bb||!bb.width) throw new Error('no canvas boundingBox');
 		const sx = (eCoords?.[0] ?? 250), sy = (eCoords?.[1] ?? 250);
 		const ex = b.x ?? 250, ey = b.y ?? 250;
-		// Canvas sits at (10,10) size 500x470 inside the 520-wide iframe (from challenge DOM)
-		const canvasOffX = 10, canvasOffY = 10;
 		// Convert task 0-500 coords -> page coords
-		const px1 = iframeBox.left + canvasOffX + ((sx + (eSize?.[0] ?? 0) / 2) / 500) * 500;
-		const py1 = iframeBox.top  + canvasOffY + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * 470;
-		const px2 = iframeBox.left + canvasOffX + (clamp(ex) / 500) * 500;
-		const py2 = iframeBox.top  + canvasOffY + (clamp(ey) / 500) * 470;
-		console.log(`[BrowserClaim][Recognition] cdp-warmup drag (${sx},${sy})->(${ex},${ey}) page (${px1.toFixed(0)},${py1.toFixed(0)})->(${px2.toFixed(0)},${py2.toFixed(0)}) iframe@(${iframeBox.left.toFixed(0)},${iframeBox.top.toFixed(0)})`);
+		const px1 = bb.x + ((sx + (eSize?.[0] ?? 0) / 2) / 500) * bb.width;
+		const py1 = bb.y + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * bb.height;
+		const px2 = bb.x + (clamp(ex) / 500) * bb.width;
+		const py2 = bb.y + (clamp(ey) / 500) * bb.height;
+		console.log(`[BrowserClaim][Recognition] cdp-warmup drag (${sx},${sy})->(${ex},${ey}) page (${px1.toFixed(0)},${py1.toFixed(0)})->(${px2.toFixed(0)},${py2.toFixed(0)}) canvas@(${bb.x.toFixed(0)},${bb.y.toFixed(0)}) ${bb.width}x${bb.height}`);
 		const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
 		// 2. WARMUP: ~3.5s of idle human-like cursor wandering near the puzzle area.
 		//    Builds mouse history so hCaptcha motionData doesn't see "cursor appears from nowhere".
