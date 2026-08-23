@@ -319,12 +319,12 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
 		// 2. WARMUP: ~3.5s of idle human-like cursor wandering near the puzzle area.
 		//    Builds mouse history so hCaptcha motionData doesn't see "cursor appears from nowhere".
-		let wx=iframeBox.left+iframeBox.width/2+rnd(-80,80), wy=iframeBox.top+iframeBox.height/2+rnd(-60,60);
+		let wx=bb.x+bb.width/2+rnd(-80,80), wy=bb.y+bb.height/2+rnd(-60,60);
 		await page.mouse.move(wx, wy, {steps: Math.round(rnd(6,12))});
 		for (let i = 0; i < 14; i++) {
 			wx += rnd(-90, 90); wy += rnd(-50, 50);
-			wx = Math.max(iframeBox.left-40, Math.min(iframeBox.left+iframeBox.width+40, wx));
-			wy = Math.max(iframeBox.top-30, Math.min(iframeBox.top+iframeBox.height+30, wy));
+			wx = Math.max(bb.x-40, Math.min(bb.x+bb.width+40, wx));
+			wy = Math.max(bb.y-30, Math.min(bb.y+bb.height+30, wy));
 			await page.mouse.move(wx, wy, {steps: Math.round(rnd(4,9))});
 			await page.waitForTimeout(rnd(120, 320));
 		}
