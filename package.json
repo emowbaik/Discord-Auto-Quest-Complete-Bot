@@ -26,6 +26,7 @@
     "@discordjs/core": "2.4.0",
     "@discordjs/rest": "^2.6.2",
     "@discordjs/ws": "2.0.4",
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "undici": "^6.24.1"
   },
   "optionalDependencies": {

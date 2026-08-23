@@ -319,41 +319,84 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const py1 = bb.y + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * bb.height;
 		const px2 = bb.x + (clamp(ex) / 500) * bb.width;
 		const py2 = bb.y + (clamp(ey) / 500) * bb.height;
-		console.log(`[BrowserClaim][Recognition] cdp-warmup drag (${sx},${sy})->(${ex},${ey}) page (${px1.toFixed(0)},${py1.toFixed(0)})->(${px2.toFixed(0)},${py2.toFixed(0)}) canvas@(${bb.x.toFixed(0)},${bb.y.toFixed(0)}) ${bb.width}x${bb.height}`);
+		console.log(`[BrowserClaim][Recognition] drag targets page (${px1.toFixed(0)},${py1.toFixed(0)})->(${px2.toFixed(0)},${py2.toFixed(0)}) canvas@(${bb.x.toFixed(0)},${bb.y.toFixed(0)}) ${bb.width}x${bb.height}`);
 		const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
-		// 2. WARMUP: ~3.5s of idle human-like cursor wandering near the puzzle area.
-		//    Builds mouse history so hCaptcha motionData doesn't see "cursor appears from nowhere".
-		let wx=bb.x+bb.width/2+rnd(-80,80), wy=bb.y+bb.height/2+rnd(-60,60);
-		await page.mouse.move(wx, wy, {steps: Math.round(rnd(6,12))});
-		for (let i = 0; i < 14; i++) {
-			wx += rnd(-90, 90); wy += rnd(-50, 50);
-			wx = Math.max(bb.x-40, Math.min(bb.x+bb.width+40, wx));
-			wy = Math.max(bb.y-30, Math.min(bb.y+bb.height+30, wy));
-			await page.mouse.move(wx, wy, {steps: Math.round(rnd(4,9))});
-			await page.waitForTimeout(rnd(120, 320));
+		const zzz=(ms:number)=>new Promise((r:any)=>setTimeout(r,ms));
+		// PRIMARY: OS-level real mouse (@nut-tree-fork/nut-js) — Win32 SendInput, identical to human input,
+		// immune to hCaptcha CDP fingerprinting. Requires non-headless + unlocked desktop.
+		// FALLBACK: previous trusted-CDP path if nut-js unavailable/fails.
+		let osDone=false; let NJ:any=null;
+		try { NJ=await import('@nut-tree-fork/nut-js'); } catch(e:any){ console.warn(`[BrowserClaim][Recognition] nut-js unavailable (${e?.message}) -> CDP fallback`); }
+		if(NJ){
+			try{
+				const {mouse,Point,Button}=NJ;
+				let scrW=1920; try{ scrW=await NJ.screen.width(); }catch{}
+				const m:any=await page.evaluate('(() => ({sx0:window.screenX,sy0:window.screenY,ow:window.outerWidth,iw:window.innerWidth,oh:window.outerHeight,ih:window.innerHeight,sw:(window.screen&&window.screen.width)||1920}))()');
+				const scale=Math.max(0.5,Math.min(4,m.sw>0?scrW/m.sw:1));
+				// viewport(CSS px in page) -> physical screen px
+				const toScr=(vx:number,vy:number)=>({x:Math.round((m.sx0+(m.ow-m.iw)/2+vx)*scale),y:Math.round((m.sy0+(m.oh-m.ih)+vy)*scale)});
+				const sp1=toScr(px1,py1), sp2=toScr(px2,py2);
+				console.log(`[BrowserClaim][Recognition] os-mouse drag screen (${sp1.x},${sp1.y})->(${sp2.x},${sp2.y}) scale=${scale.toFixed(2)} win@(${m.sx0},${m.sy0})`);
+				// WARMUP: real cursor wanders near puzzle (~3s)
+				await mouse.setPosition(new Point(Math.round(scrW/2),Math.round(400*scale)));
+				await zzz(rnd(250,450));
+				for(let i=0;i<10;i++){
+					const w=toScr(bb.x+rnd(60,bb.width-60),bb.y+rnd(40,bb.height-40));
+					await mouse.setPosition(new Point(w.x,w.y)); await zzz(rnd(160,340));
+				}
+				// Approach piece: overshoot then settle
+				await mouse.setPosition(new Point(sp1.x+Math.round(rnd(-30,30)),sp1.y+Math.round(rnd(-25,25)))); await zzz(rnd(130,280));
+				await mouse.setPosition(new Point(sp1.x,sp1.y)); await zzz(rnd(200,380));
+				// DRAG: bezier arc, ease-in-out, jitter
+				await mouse.pressButton(Button.LEFT); await zzz(rnd(100,200));
+				const N=Math.round(rnd(24,34));
+				const mcx=(px1+px2)/2+rnd(-45,45), mcy=(py1+py2)/2+rnd(-28,28);
+				for(let i=1;i<=N;i++){
+					const t=i/N;
+					const bx=(1-t)*(1-t)*px1+2*(1-t)*t*mcx+t*t*px2+rnd(-1,1);
+					const by=(1-t)*(1-t)*py1+2*(1-t)*t*mcy+t*t*py2+rnd(-1,1);
+					const s=toScr(bx,by);
+					await mouse.setPosition(new Point(s.x,s.y));
+					const speed=t<0.5?(1-2*t)*45+90:(2*(t-0.5))*45+90;
+					await zzz(rnd(speed*0.7,speed*1.3));
+				}
+				await zzz(rnd(160,300));
+				await mouse.releaseButton(Button.LEFT);
+				osDone=true;
+				console.log('[BrowserClaim][Recognition] os-mouse drag done');
+			}catch(e:any){ console.warn(`[BrowserClaim][Recognition] os-mouse failed (${e?.message}) -> CDP fallback`); }
 		}
-		// 3. Move to piece with decelerating approach (human aims then corrects)
-		await page.mouse.move((px1+wx)/2+rnd(-10,10), (py1+wy)/2+rnd(-10,10), {steps: Math.round(rnd(5,8))});
-		await page.waitForTimeout(rnd(100,200));
-		await page.mouse.move(px1+rnd(-1.5,1.5), py1+rnd(-1.5,1.5), {steps: Math.round(rnd(3,5))});
-		await page.waitForTimeout(rnd(150,300)); // human pause on target
-		// 4. DRAG with bezier arc + ease-in-out velocity + jitter
-		await page.mouse.down();
-		await page.waitForTimeout(rnd(90,180)); // grip pause
-		const N=Math.round(rnd(22,30));
-		const mcx=(px1+px2)/2+rnd(-45,45), mcy=(py1+py2)/2+rnd(-28,28);
-		for(let i=1;i<=N;i++){
-			const t=i/N;
-			const bx=(1-t)*(1-t)*px1+2*(1-t)*t*mcx+t*t*px2;
-			const by=(1-t)*(1-t)*py1+2*(1-t)*t*mcy+t*t*py2;
-			await page.mouse.move(bx+rnd(-1.0,1.0), by+rnd(-1.0,1.0), {steps:1});
-			// ease: slow start, fast middle, slow end
-			const speed = t<0.5 ? (1-2*t)*55+110 : (2*(t-0.5))*55+110; // 165 -> 110 -> 165
-			await page.waitForTimeout(rnd(speed*0.7, speed*1.3));
+		if(!osDone){
+			// CDP fallback: trusted events + warmup (previous behavior)
+			let wx=bb.x+bb.width/2+rnd(-80,80), wy=bb.y+bb.height/2+rnd(-60,60);
+			await page.mouse.move(wx, wy, {steps: Math.round(rnd(6,12))});
+			for (let i = 0; i < 14; i++) {
+				wx += rnd(-90, 90); wy += rnd(-50, 50);
+				wx = Math.max(bb.x-40, Math.min(bb.x+bb.width+40, wx));
+				wy = Math.max(bb.y-30, Math.min(bb.y+bb.height+30, wy));
+				await page.mouse.move(wx, wy, {steps: Math.round(rnd(4,9))});
+				await page.waitForTimeout(rnd(120, 320));
+			}
+			await page.mouse.move((px1+wx)/2+rnd(-10,10), (py1+wy)/2+rnd(-10,10), {steps: Math.round(rnd(5,8))});
+			await page.waitForTimeout(rnd(100,200));
+			await page.mouse.move(px1+rnd(-1.5,1.5), py1+rnd(-1.5,1.5), {steps: Math.round(rnd(3,5))});
+			await page.waitForTimeout(rnd(150,300));
+			await page.mouse.down();
+			await page.waitForTimeout(rnd(90,180));
+			const N=Math.round(rnd(22,30));
+			const mcx=(px1+px2)/2+rnd(-45,45), mcy=(py1+py2)/2+rnd(-28,28);
+			for(let i=1;i<=N;i++){
+				const t=i/N;
+				const bx=(1-t)*(1-t)*px1+2*(1-t)*t*mcx+t*t*px2;
+				const by=(1-t)*(1-t)*py1+2*(1-t)*t*mcy+t*t*py2;
+				await page.mouse.move(bx+rnd(-1.0,1.0), by+rnd(-1.0,1.0), {steps:1});
+				const speed = t<0.5 ? (1-2*t)*55+110 : (2*(t-0.5))*55+110;
+				await page.waitForTimeout(rnd(speed*0.7, speed*1.3));
+			}
+			await page.mouse.move(px2+rnd(-1,1), py2+rnd(-1,1), {steps:2});
+			await page.waitForTimeout(rnd(140,260));
+			await page.mouse.up();
 		}
-		await page.mouse.move(px2+rnd(-1,1), py2+rnd(-1,1), {steps:2});
-		await page.waitForTimeout(rnd(140,260)); // release pause
-		await page.mouse.up();
 		await page.waitForTimeout(rnd(600,900));
 		// debug iframe body after drag
 		try {
