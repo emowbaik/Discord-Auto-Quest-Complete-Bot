@@ -310,7 +310,7 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		} catch {}
 		// Invisible-widget mode may park the challenge iframe offscreen (top:-9999).
 		// Force it into the viewport so real mouse events can reach it; re-apply each retry.
-		const reposIframes = (() => {
+		const reposIframes = `(() => {
 			var ifr=document.querySelectorAll('iframe');
 			for(var i=0;i<ifr.length;i++){
 				var f=ifr[i];
@@ -321,7 +321,7 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 					}
 				}
 			}
-		})();
+		})()`;
 		let bb:any=null;
 		for(let i=0;i<12&&!bb;i++){
 			try { await page.evaluate(reposIframes); } catch {}
