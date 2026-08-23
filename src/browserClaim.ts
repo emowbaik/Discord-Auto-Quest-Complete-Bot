@@ -294,18 +294,64 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const isIndices = Array.isArray(result) && result.length > 0 && typeof result[0] === 'number';
 		const grids: any[][] = isIndices ? [result as any[]] : (Array.isArray(result[0]) ? (result as any[][]) : [result as any[]]);
 		const flat = grids[0] ?? [];
-		console.log(`[BrowserClaim][Recognition] clicking tiles ${isIndices ? JSON.stringify(flat) : flat.map((v: any, i: number) => v ? i : -1).filter((x: number) => x >= 0).join(',')}`);
-		const frames = page.frames(); let challengeFrame: any = null;
-		for (const f of frames) { try { const u = f.url(); if (u.includes('hcaptcha.com/captcha') || u.includes('hcaptcha.com/checkcaptcha')) { challengeFrame = f; break; } } catch {} }
-		if (!challengeFrame) challengeFrame = page.frameLocator('iframe[src*="hcaptcha.com"]').first();
-		for (let idx = 0; idx < (isIndices ? Math.max(...flat as number[]) + 1 : flat.length); idx++) {
-			if (isIndices ? !(flat as number[]).includes(idx) : !flat[idx]) continue;
-			try {
-			if (challengeFrame.evaluate) await challengeFrame.evaluate((i: number) => { const sels = ['.task-image', '.challenge-container .image', '[class*="task-image"]', '.image-list .image', 'div[role="button"]']; let els: Element[] = []; for (const s of sels) { const f = document.querySelectorAll(s); if (f.length >= 9) { els = Array.from(f); break; } if (f.length > els.length) els = Array.from(f); } if (els[i]) (els[i] as HTMLElement).click(); }, idx);
-			else await challengeFrame.locator('.task-image').nth(idx).click({ timeout: 5000 }).catch(() => {});
-			await page.waitForTimeout(250);
-		} catch {} }
-		try { if (challengeFrame.evaluate) await challengeFrame.evaluate(() => { const b = (document.querySelector('[class*="button-submit"]') ?? document.querySelector('div.button-submit') ?? document.querySelector('button[type="submit"]')) as HTMLElement | null; if (b) b.click(); }); else await challengeFrame.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
+		const selIdx: number[] = isIndices ? (flat as number[]).slice() : flat.map((v: any, i: number) => v ? i : -1).filter((x: number) => x >= 0);
+		console.log(`[BrowserClaim][Recognition] clicking tiles ${JSON.stringify(selIdx)}`);
+		const frames = page.frames(); let cf: any = null;
+		for (const f of frames) { try { const u = f.url(); if (u.includes('hcaptcha.com/captcha') || u.includes('hcaptcha.com/checkcaptcha')) { cf = f; break; } } catch {} }
+		if (!cf) throw new Error('no challenge frame');
+		// Reposition offscreen iframes into viewport (invisible mode parks them at top:-9999)
+		try { await page.evaluate('(() => { var ifr=document.querySelectorAll("iframe"); for(var i=0;i<ifr.length;i++){ var f=ifr[i]; if((f.src||"").indexOf("hcaptcha")!==-1){ var r=f.getBoundingClientRect(); if(r.width>400&&r.height>400&&(r.top<0||r.left<0)){ f.style.top="90px"; f.style.left="120px"; f.style.position="fixed"; } } } })()'); } catch {}
+		const nTiles: number = await cf.evaluate('(() => { return document.querySelectorAll(".task-image,[class*=task-image]").length; })()').catch(() => 0);
+		const tbb: any[] = [];
+		for (let idx = 0; idx < nTiles; idx++) {
+			let b: any = null;
+			try { b = await cf.locator('.task-image, [class*="task-image"]').nth(idx).boundingBox(); } catch {}
+			tbb.push(b && b.width ? b : null);
+		}
+		// PRIMARY: OS-level real clicks (trusted input chain -> higher siteverify score).
+		// Synthetic el.click() tokens are issued by hCaptcha but rejected by Discord (invalid-response).
+		let clicked = false;
+		try {
+			const NJ: any = await import('@nut-tree-fork/nut-js');
+			const { mouse, Point, Button } = NJ;
+			let scrW = 1920; try { scrW = await NJ.screen.width(); } catch {}
+			const m: any = await page.evaluate('(() => ({sx0:window.screenX,sy0:window.screenY,ow:window.outerWidth,iw:window.innerWidth,oh:window.outerHeight,ih:window.innerHeight,sw:(window.screen&&window.screen.width)||1920}))()');
+			const scale = Math.max(0.5, Math.min(4, m.sw > 0 ? scrW / m.sw : 1));
+			const zzz = (ms: number) => new Promise((r: any) => setTimeout(r, ms));
+			const toScr = (vx: number, vy: number) => ({ x: Math.round((m.sx0 + (m.ow - m.iw) / 2 + vx) * scale), y: Math.round((m.sy0 + (m.oh - m.ih) + vy) * scale) });
+			for (const idx of selIdx) {
+				const b = tbb[idx]; if (!b) continue;
+				const s = toScr(b.x + b.width / 2 + (Math.random() * 8 - 4), b.y + b.height / 2 + (Math.random() * 8 - 4));
+				await mouse.setPosition(new Point(s.x, s.y)); await zzz(120 + Math.random() * 180);
+				await mouse.pressButton(Button.LEFT); await zzz(60 + Math.random() * 80);
+				await mouse.releaseButton(Button.LEFT);
+				clicked = true;
+				console.log(`[BrowserClaim][Recognition] os-mouse clicked tile ${idx} at (${s.x},${s.y})`);
+				await zzz(250 + Math.random() * 250);
+			}
+			let sb: any = null; try { sb = await cf.locator('[class*="button-submit"]').first().boundingBox(); } catch {}
+			if (sb && sb.width) {
+				const s = toScr(sb.x + sb.width / 2, sb.y + sb.height / 2);
+				await mouse.setPosition(new Point(s.x, s.y)); await zzz(150 + Math.random() * 150);
+				await mouse.pressButton(Button.LEFT); await zzz(60);
+				await mouse.releaseButton(Button.LEFT);
+				console.log(`[BrowserClaim][Recognition] os-mouse submit at (${s.x},${s.y})`);
+			} else if (clicked) {
+				try { await cf.evaluate('(() => { var b=document.querySelector("[class*=button-submit]"); if(b) b.click(); })()'); } catch {}
+			}
+		} catch (e: any) { console.warn(`[BrowserClaim][Recognition] os-mouse tile click failed (${e?.message}) -> synthetic fallback`); }
+		if (!clicked) {
+			// legacy synthetic path
+			for (let idx = 0; idx < (isIndices ? Math.max(...flat as number[]) + 1 : flat.length); idx++) {
+				if (isIndices ? !(flat as number[]).includes(idx) : !flat[idx]) continue;
+				try {
+					if (cf.evaluate) await cf.evaluate((i: number) => { const sels = ['.task-image', '.challenge-container .image', '[class*="task-image"]', '.image-list .image', 'div[role="button"]']; let els: Element[] = []; for (const s of sels) { const f = document.querySelectorAll(s); if (f.length >= 9) { els = Array.from(f); break; } if (f.length > els.length) els = Array.from(f); } if (els[i]) (els[i] as HTMLElement).click(); }, idx);
+					else await cf.locator('.task-image').nth(idx).click({ timeout: 5000 }).catch(() => {});
+					await page.waitForTimeout(250);
+				} catch {}
+			}
+			try { if (cf.evaluate) await cf.evaluate('(() => { var b=(document.querySelector("[class*=button-submit]")||document.querySelector("div.button-submit")||document.querySelector("button[type=submit]")); if(b) b.click(); })()'); else await cf.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
+		}
 		await page.waitForTimeout(1500); return;
 	}
 	if (reqType === 'image_drag_drop') {
