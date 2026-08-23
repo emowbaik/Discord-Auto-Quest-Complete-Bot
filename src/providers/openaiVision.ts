@@ -61,8 +61,16 @@ export class OpenAIVisionSolver {
 		const scale = (n: number) => Math.round(clamp01(n) * 500);
 		if (reqType==='image_drag_drop') {
 			const eid=(task.tasklist&&task.tasklist[0]&&task.tasklist[0].task_key)||'e0';
-			if (typeof parsed.x!=='number') throw new Error('Missing x');
-			return [[{entity_id:eid,x:scale(parsed.x),y:scale(parsed.y),w:20,h:20}]];
+			// Tolerant extraction: models may return {x,y}, [{x,y}], {target:{x,y}}, or numeric strings
+			let p:any = parsed;
+			if (Array.isArray(p)) p = p[0];
+			if (p && typeof p==='object' && p.target && typeof p.target==='object') p = p.target;
+			const nx = p ? Number(p.x) : NaN; const ny = p ? Number(p.y) : NaN;
+			if (!isFinite(nx)) {
+				console.warn('[OpenAIVision] drag_drop unparseable answer:', raw.slice(0,300));
+				throw new Error('Missing x');
+			}
+			return [[{entity_id:eid,x:scale(nx),y:scale(isFinite(ny)?ny:0),w:20,h:20}]];
 		}
 		if (!Array.isArray(parsed)) throw new Error('Expected array');
 		return [parsed.map((p:any)=>({x:scale(p.x),y:scale(p.y),w:Number(p.w||0),h:Number(p.h||0)}))];
