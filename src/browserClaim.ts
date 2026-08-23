@@ -227,27 +227,47 @@ if(!captured) { try{ const vis = await page.evaluate('(() => { try { const w:any
 		}
 	}
 	page.off('console', consoleHandler);
-	const task: HCaptchaTask = captured;
-	let result: any;
-	try { console.log(`[BrowserClaim][Recognition] task json ${JSON.stringify(task).slice(0, 2500)}`); console.log(`[BrowserClaim][Recognition] solving ${(task as any).request_type} via OpenAI Vision (${task.tasklist.length} tasks)...`); result = await solveHCaptchaRecognition(task); console.log(`[BrowserClaim][Recognition] result: ${JSON.stringify(result).slice(0, 500)}`); } catch (e) { console.error(`[BrowserClaim][Recognition] solve failed:`, e instanceof Error ? e.message : String(e)); console.warn(`[BrowserClaim][Recognition] Vision API gagal. Kemungkinan: API key invalid / endpoint down / model tidak support vision.`); console.warn(`[BrowserClaim][Recognition] Fallback: tunggu solve manual di browser ${!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS==='false' ? '30s (silakan klik puzzle jika muncul)' : 'headless — set BROWSER_HEADLESS=false untuk manual'}`); // keep widget visible for manual
-try{ await page.waitForTimeout(2000); }catch{}
-let manualTok=''; for(let w=0;w<60;w++){ try{ manualTok=await page.evaluate(`(id=>{const w=window; try{if(w.__hcToken) return w.__hcToken; try{const t=w.hcaptcha.getResponse(id); if(t) return t;}catch{} return w.hcaptcha.getResponse()||'';}catch{return ''}})(${JSON.stringify(widgetId)})`).catch(()=>''); if(manualTok){ console.log(`[BrowserClaim][Recognition] manual token len=${manualTok.length}`); page.off('response', handler); try{await page.unroute('**/getcaptcha**');}catch{} page.off('console', consoleHandler); return await claimWithToken(manualTok, captchaRaw, browserFetch, quest);} }catch{} await page.waitForTimeout(1000); if(w%10===9) console.log(`[BrowserClaim][Recognition] menunggu manual... ${w+1}s`); }
-page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } catch {} page.off('console', consoleHandler); return false; }
-	page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } catch {}
-	try { await applyRecognitionResult(page, task, result); } catch (e) { console.warn(`[BrowserClaim][Recognition] apply failed:`, e instanceof Error ? e.message : String(e)); return false; }
+	let task: HCaptchaTask = captured;
+	// Keep getcaptcha route active: on a wrong answer hCaptcha serves a NEW challenge
+	// (new getcaptcha response) which we re-capture here and retry (max 3 attempts).
+	const findTask3 = (obj: any, d = 0): any => { if (!obj || typeof obj !== 'object' || d > 6) return null; if (obj.request_type && Array.isArray(obj.tasklist)) return obj; for (const v of Object.values(obj)) { if (v && typeof v === 'object') { const r = findTask3(v, d + 1); if (r) return r; } } return null; };
 	hcaptchaToken = '';
-	for (let i = 0; i < 20; i++) {
-		await page.waitForTimeout(1000);
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		let result: any;
 		try {
-			hcaptchaToken = await page.evaluate(`(id => { const w = window; try { if (w.__hcToken) return w.__hcToken; try { const t = w.hcaptcha.getResponse(id); if (t) return t; } catch {} return w.hcaptcha.getResponse() || ''; } catch { return ''; } })(${JSON.stringify(widgetId)})`).catch(() => '');
-		} catch {}
-		if (hcaptchaToken) break;
+			console.log(`[BrowserClaim][Recognition] solving ${(task as any).request_type} via OpenAI Vision (attempt ${attempt}, ${task.tasklist.length} tasks)...`);
+			result = await solveHCaptchaRecognition(task);
+			console.log(`[BrowserClaim][Recognition] result: ${JSON.stringify(result).slice(0, 500)}`);
+		} catch (e) {
+			console.error(`[BrowserClaim][Recognition] solve failed:`, e instanceof Error ? e.message : String(e));
+			break;
+		}
+		getcaptchaJson = null; captured = null;
+		try { await applyRecognitionResult(page, task, result); } catch (e) { console.warn(`[BrowserClaim][Recognition] apply failed:`, e instanceof Error ? e.message : String(e)); break; }
+		hcaptchaToken = '';
+		for (let i = 0; i < 15; i++) {
+			await page.waitForTimeout(1000);
+			try {
+				hcaptchaToken = await page.evaluate(`(id => { const w = window; try { if (w.__hcToken) return w.__hcToken; try { const t = w.hcaptcha.getResponse(id); if (t) return t; } catch {} return w.hcaptcha.getResponse() || ''; } catch { return ''; } })(${JSON.stringify(widgetId)})`).catch(() => '');
+			} catch {}
+			if (hcaptchaToken) break;
+		}
+		if (hcaptchaToken) { console.log(`[BrowserClaim][Recognition] auto-solve token len=${hcaptchaToken.length} (attempt ${attempt})`); break; }
+		if (attempt === 3) { console.warn(`[BrowserClaim][Recognition] auto-solve rejected 3x — switching to manual fallback`); break; }
+		console.warn(`[BrowserClaim][Recognition] attempt ${attempt} rejected — waiting for new challenge to retry...`);
+		let newTask: any = null;
+		for (let i = 0; i < 20 && !newTask; i++) {
+			if (getcaptchaJson) { const c3 = findTask3(getcaptchaJson); if (c3 && c3 !== task) newTask = c3; }
+			if (!newTask) await page.waitForTimeout(500);
+		}
+		if (!newTask) { console.warn(`[BrowserClaim][Recognition] no new challenge captured — stop retrying`); break; }
+		console.log(`[BrowserClaim][Recognition] new challenge captured: ${newTask.request_type} tasks=${newTask.tasklist?.length ?? 0}`);
+		task = newTask as HCaptchaTask;
 	}
 	if (!hcaptchaToken) {
-		// auto-solve rejected (hcaptcha "Please try again"). Give user a chance to solve manually in the (visible) iframe,
-		// then bot auto-claims once token appears. This is the reliable free-tier path.
-		console.warn(`[BrowserClaim][Recognition] token empty after clicks — switching to manual fallback`);
-		if (!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS==='false') console.warn(`[BrowserClaim][Recognition] Klik puzzle hCaptcha di browser yang terbuka (BROWSER_HEADLESS=false). Bot akan auto-claim saat selesai. Menunggu max 120s...`);
+		// auto-solve rejected. Give user a chance to solve manually in the (visible) iframe,
+		// then bot auto-claims once token appears.
+		if (!process.env.BROWSER_HEADLESS || process.env.BROWSER_HEADLESS === 'false') console.warn(`[BrowserClaim][Recognition] Klik puzzle hCaptcha di browser yang terbuka (BROWSER_HEADLESS=false). Bot akan auto-claim saat selesai. Menunggu max 120s...`);
 		else console.warn(`[BrowserClaim][Recognition] set BROWSER_HEADLESS=false untuk solve captcha secara manual lalu claim otomatis.`);
 		for (let w = 0; w < 120; w++) {
 			try {
@@ -257,9 +277,10 @@ page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } ca
 			await page.waitForTimeout(1000);
 			if (w % 15 === 14) console.log(`[BrowserClaim][Recognition] menunggu manual solve... ${w + 1}s`);
 		}
-		if (!hcaptchaToken) { console.warn(`[BrowserClaim][Recognition] manual solve timeout — claim gagal`); return false; }
+		if (!hcaptchaToken) { console.warn(`[BrowserClaim][Recognition] manual solve timeout — claim gagal`); page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } catch {} return false; }
 		console.log(`[BrowserClaim][Recognition] manual token acquired len=${hcaptchaToken.length}, claiming...`);
 	}
+	page.off('response', handler); try { await page.unroute('**/getcaptcha**'); } catch {}
 	return await claimWithToken(hcaptchaToken, captchaRaw, browserFetch, quest);
 }
 
