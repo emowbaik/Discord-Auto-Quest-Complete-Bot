@@ -308,10 +308,27 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 			})()`);
 			console.log(`[BrowserClaim][Recognition] all hcaptcha iframes: ${JSON.stringify(allIframes)}`);
 		} catch {}
-		// SINGLE COORDINATE SOURCE: canvas boundingBox from the challenge frame (Playwright resolves
-		// through nested frames into main-viewport coords). Proven to move pieces visually.
-		const bb:any=await fr.locator('canvas').first().boundingBox().catch(()=>null);
-		if(!bb||!bb.width) throw new Error('no canvas boundingBox');
+		// Invisible-widget mode may park the challenge iframe offscreen (top:-9999).
+		// Force it into the viewport so real mouse events can reach it; re-apply each retry.
+		const reposIframes = (() => {
+			var ifr=document.querySelectorAll('iframe');
+			for(var i=0;i<ifr.length;i++){
+				var f=ifr[i];
+				if((f.src||'').indexOf('hcaptcha')!==-1){
+					var r=f.getBoundingClientRect();
+					if(r.width>400&&r.height>400&&(r.top<0||r.left<0)){
+						f.style.top='90px'; f.style.left='120px'; f.style.position='fixed';
+					}
+				}
+			}
+		})();
+		let bb:any=null;
+		for(let i=0;i<12&&!bb;i++){
+			try { await page.evaluate(reposIframes); } catch {}
+			bb=await fr.locator('canvas').first().boundingBox().catch(()=>null);
+			if(!bb||!bb.width){ bb=null; await page.waitForTimeout(500); }
+		}
+		if(!bb) throw new Error('no canvas boundingBox');
 		const sx = (eCoords?.[0] ?? 250), sy = (eCoords?.[1] ?? 250);
 		const ex = b.x ?? 250, ey = b.y ?? 250;
 		// Convert task 0-500 coords -> page coords
