@@ -269,13 +269,17 @@ function clamp(n:number,lo=0,hi=500){ return Math.max(lo,Math.min(hi,n)); }
 async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any): Promise<void> {
 	const reqType = (task as any).request_type as string;
 	if (reqType === 'image_label_binary') {
-		const grids: boolean[][] = Array.isArray(result[0]) ? (result as boolean[][]) : [result as boolean[]];
+		// Vision may return boolean array OR selected tile indices (e.g. [0,4])
+		const isIndices = Array.isArray(result) && result.length > 0 && typeof result[0] === 'number';
+		const grids: any[][] = isIndices ? [result as any[]] : (Array.isArray(result[0]) ? (result as any[][]) : [result as any[]]);
 		const flat = grids[0] ?? [];
-		console.log(`[BrowserClaim][Recognition] clicking tiles ${flat.map((v, i) => v ? i : -1).filter((x) => x >= 0).join(',')}`);
+		console.log(`[BrowserClaim][Recognition] clicking tiles ${isIndices ? JSON.stringify(flat) : flat.map((v: any, i: number) => v ? i : -1).filter((x: number) => x >= 0).join(',')}`);
 		const frames = page.frames(); let challengeFrame: any = null;
 		for (const f of frames) { try { const u = f.url(); if (u.includes('hcaptcha.com/captcha') || u.includes('hcaptcha.com/checkcaptcha')) { challengeFrame = f; break; } } catch {} }
 		if (!challengeFrame) challengeFrame = page.frameLocator('iframe[src*="hcaptcha.com"]').first();
-		for (let idx = 0; idx < flat.length; idx++) { if (!flat[idx]) continue; try {
+		for (let idx = 0; idx < (isIndices ? Math.max(...flat as number[]) + 1 : flat.length); idx++) {
+			if (isIndices ? !(flat as number[]).includes(idx) : !flat[idx]) continue;
+			try {
 			if (challengeFrame.evaluate) await challengeFrame.evaluate((i: number) => { const sels = ['.task-image', '.challenge-container .image', '[class*="task-image"]', '.image-list .image', 'div[role="button"]']; let els: Element[] = []; for (const s of sels) { const f = document.querySelectorAll(s); if (f.length >= 9) { els = Array.from(f); break; } if (f.length > els.length) els = Array.from(f); } if (els[i]) (els[i] as HTMLElement).click(); }, idx);
 			else await challengeFrame.locator('.task-image').nth(idx).click({ timeout: 5000 }).catch(() => {});
 			await page.waitForTimeout(250);
