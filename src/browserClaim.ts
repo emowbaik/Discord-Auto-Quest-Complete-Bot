@@ -329,7 +329,8 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 				console.log(`[BrowserClaim][Recognition] os-mouse clicked tile ${idx} at (${s.x},${s.y})`);
 				await zzz(250 + Math.random() * 250);
 			}
-			let sb: any = null; try { sb = await cf.locator('[class*="button-submit"]').first().boundingBox(); } catch {}
+			let sb: any = null; try { sb = await cf.locator('[class*="button-submit"]:not([class*="spinner"])').first().boundingBox(); } catch {}
+			console.log(`[BrowserClaim][Recognition] submit bbox ${JSON.stringify(sb)}`);
 			if (sb && sb.width) {
 				const s = toScr(sb.x + sb.width / 2, sb.y + sb.height / 2);
 				await mouse.setPosition(new Point(s.x, s.y)); await zzz(150 + Math.random() * 150);
