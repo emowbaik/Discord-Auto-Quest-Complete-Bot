@@ -290,110 +290,86 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		const b=boxes[0]||{x:250,y:250};
 		const fr=page.frames().find((f:any)=>{ try{ const u=f.url(); return u.includes('hcaptcha.com/captcha'); }catch{ return false; } });
 		if(!fr) throw new Error('no challenge frame');
-		// String-based evaluate: avoids tsx __name helper injection in browser context
-		// 1. Get canvas/image bounding rect from INSIDE iframe
-		const iframeDims: any = await fr.evaluate('(() => { var c=document.querySelector("canvas"); var el=c||document.querySelector(".task-image,img"); if(!el) return null; var r=el.getBoundingClientRect(); return {left:r.left,top:r.top,width:r.width,height:r.height,cw:el.width||r.width,ch:el.height||r.height}; })()').catch(() => null);
-		if (!iframeDims) throw new Error('no iframe canvas dims');
-		// 2. Log DOM structure for debugging (leafy elements with size)
-		const domDbg: any = await fr.evaluate('(() => { var els=[...document.querySelectorAll("*")].map(function(el){ var r=el.getBoundingClientRect(); if(r.width<5||r.height<5) return null; return {tag:el.tagName,cls:(el.className||"").toString().slice(0,40),id:el.id||"",l:Math.round(r.left),t:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),drag:el.draggable,role:el.getAttribute("role")||""}; }).filter(Boolean); return els.slice(0,40); })()').catch(() => null);
-		if (domDbg) console.log(`[BrowserClaim][Recognition] challenge DOM: ${JSON.stringify(domDbg).slice(0, 2000)}`);
+		// CDP trusted-event strategy: synthetic dispatchEvent has isTrusted=false and hCaptcha ignores it,
+		// so use page.mouse (real input pipeline) preceded by human-like warmup motion to build
+		// plausible motionData history before the actual drag.
+		// 1. Find the hcaptcha challenge iframe element on the parent page -> page-level bounding box
+		const iframeBox: any = await page.evaluate(`(() => {
+			var iframes = document.querySelectorAll('iframe');
+			for (var i = 0; i < iframes.length; i++) {
+				var f = iframes[i];
+				if ((f.src || '').indexOf('hcaptcha.com/captcha') !== -1) {
+					var r = f.getBoundingClientRect();
+					return { left: r.left, top: r.top, width: r.width, height: r.height };
+				}
+			}
+			return null;
+		})()`).catch(() => null);
+		if (!iframeBox) throw new Error('no hcaptcha iframe element found');
 		const sx = (eCoords?.[0] ?? 250), sy = (eCoords?.[1] ?? 250);
 		const ex = b.x ?? 250, ey = b.y ?? 250;
-		// Convert 0-500 to iframe-local clientX/clientY (getBoundingClientRect inside iframe)
-		const x1 = iframeDims.left + ((sx + (eSize?.[0] ?? 0) / 2) / 500) * iframeDims.width;
-		const y1 = iframeDims.top  + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * iframeDims.height;
-		const x2 = iframeDims.left + (clamp(ex) / 500) * iframeDims.width;
-		const y2 = iframeDims.top  + (clamp(ey) / 500) * iframeDims.height;
-		console.log(`[BrowserClaim][Recognition] iframe-synthetic drag (${sx},${sy})->(${ex},${ey}) client (${x1.toFixed(0)},${y1.toFixed(0)})->(${x2.toFixed(0)},${y2.toFixed(0)})`);
-		// Build bezier trajectory in Node context
-		const N = 20;
-		const mcx = (x1 + x2) / 2 + (Math.random() - 0.5) * 50;
-		const mcy = (y1 + y2) / 2 + (Math.random() - 0.5) * 30;
-		const pts: Array<{x:number,y:number}> = [];
-		for (let i = 1; i <= N; i++) {
-			const t = i / N;
-			pts.push({
-				x: (1-t)*(1-t)*x1 + 2*(1-t)*t*mcx + t*t*x2 + (Math.random()-0.5)*1.0,
-				y: (1-t)*(1-t)*y1 + 2*(1-t)*t*mcy + t*t*y2 + (Math.random()-0.5)*1.0,
-			});
+		// Canvas sits at (10,10) size 500x470 inside the 520-wide iframe (from challenge DOM)
+		const canvasOffX = 10, canvasOffY = 10;
+		// Convert task 0-500 coords -> page coords
+		const px1 = iframeBox.left + canvasOffX + ((sx + (eSize?.[0] ?? 0) / 2) / 500) * 500;
+		const py1 = iframeBox.top  + canvasOffY + ((sy + (eSize?.[1] ?? 0) / 2) / 500) * 470;
+		const px2 = iframeBox.left + canvasOffX + (clamp(ex) / 500) * 500;
+		const py2 = iframeBox.top  + canvasOffY + (clamp(ey) / 500) * 470;
+		console.log(`[BrowserClaim][Recognition] cdp-warmup drag (${sx},${sy})->(${ex},${ey}) page (${px1.toFixed(0)},${py1.toFixed(0)})->(${px2.toFixed(0)},${py2.toFixed(0)}) iframe@(${iframeBox.left.toFixed(0)},${iframeBox.top.toFixed(0)})`);
+		const rnd=(a:number,b:number)=>a+Math.random()*(b-a);
+		// 2. WARMUP: ~3.5s of idle human-like cursor wandering near the puzzle area.
+		//    Builds mouse history so hCaptcha motionData doesn't see "cursor appears from nowhere".
+		let wx=iframeBox.left+iframeBox.width/2+rnd(-80,80), wy=iframeBox.top+iframeBox.height/2+rnd(-60,60);
+		await page.mouse.move(wx, wy, {steps: Math.round(rnd(6,12))});
+		for (let i = 0; i < 14; i++) {
+			wx += rnd(-90, 90); wy += rnd(-50, 50);
+			wx = Math.max(iframeBox.left-40, Math.min(iframeBox.left+iframeBox.width+40, wx));
+			wy = Math.max(iframeBox.top-30, Math.min(iframeBox.top+iframeBox.height+30, wy));
+			await page.mouse.move(wx, wy, {steps: Math.round(rnd(4,9))});
+			await page.waitForTimeout(rnd(120, 320));
 		}
-		// KEY FIXES vs previous attempt:
-		// - mousedown on the PIECE element (found by proximity to entity coords)
-		// - mousemove/pointermove dispatched on DOCUMENT (standard drag: piece.onmousedown -> document.onmousemove)
-		// - mouseup on the drop-target element
-		const dragScript = `(function(sx1,sy1,ex2,ey2,trajectory){
-			var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};
-			var rnd=function(lo,hi){return lo+Math.random()*(hi-lo);};
-			var makeEv=function(type,cx,cy,isUp){
-				var isPE=type.indexOf('pointer')===0;
-				var opts={bubbles:true,cancelable:true,clientX:cx,clientY:cy,screenX:cx,screenY:cy,button:0,buttons:isUp?0:1};
-				if(isPE){opts.pointerType='mouse';opts.pointerId=1;}
-				return isPE?new PointerEvent(type,opts):new MouseEvent(type,opts);
-			};
-			return (async function(){
-				// Find piece element: smallest element at piece center, falling back to canvas
-				var canvas=document.querySelector('canvas')||document.querySelector('.task-image,img');
-				if(!canvas){console.log('[hcdrag] no canvas'); return;}
-				// Walk elementFromPoint hierarchy to find the innermost element at piece coords
-				var pieceEl=document.elementFromPoint(sx1,sy1)||canvas;
-				console.log('[hcdrag] piece at ('+Math.round(sx1)+','+Math.round(sy1)+'): '+pieceEl.tagName+' cls='+pieceEl.className.toString().slice(0,30));
-				// Hover sequence first
-				canvas.dispatchEvent(makeEv('pointerover',sx1,sy1,false));
-				canvas.dispatchEvent(makeEv('mouseover',sx1,sy1,false));
-				await sleep(rnd(80,160));
-				canvas.dispatchEvent(makeEv('mousemove',sx1,sy1,false));
-				canvas.dispatchEvent(makeEv('pointermove',sx1,sy1,false));
-				await sleep(rnd(60,120));
-				// MOUSEDOWN on the piece element
-				pieceEl.dispatchEvent(makeEv('pointerdown',sx1,sy1,false));
-				pieceEl.dispatchEvent(makeEv('mousedown',sx1,sy1,false));
-				// Also fire on canvas in case it has the listener
-				if(pieceEl!==canvas){
-					canvas.dispatchEvent(makeEv('pointerdown',sx1,sy1,false));
-					canvas.dispatchEvent(makeEv('mousedown',sx1,sy1,false));
-				}
-				await sleep(rnd(80,150));
-				// MOUSEMOVE: dispatch on document AND canvas (hCaptcha usually listens on document after mousedown)
-				for(var i=0;i<trajectory.length;i++){
-					var pt=trajectory[i];
-					document.dispatchEvent(makeEv('pointermove',pt.x,pt.y,false));
-					document.dispatchEvent(makeEv('mousemove',pt.x,pt.y,false));
-					canvas.dispatchEvent(makeEv('pointermove',pt.x,pt.y,false));
-					canvas.dispatchEvent(makeEv('mousemove',pt.x,pt.y,false));
-					var delay=i/trajectory.length<0.5?rnd(55,100):rnd(35,70);
-					await sleep(delay);
-				}
-				// Final move to drop target
-				document.dispatchEvent(makeEv('pointermove',ex2,ey2,false));
-				document.dispatchEvent(makeEv('mousemove',ex2,ey2,false));
-				canvas.dispatchEvent(makeEv('pointermove',ex2,ey2,false));
-				canvas.dispatchEvent(makeEv('mousemove',ex2,ey2,false));
-				await sleep(rnd(100,200));
-				// MOUSEUP: on drop target element AND document
-				var dropEl=document.elementFromPoint(ex2,ey2)||canvas;
-				console.log('[hcdrag] drop at ('+Math.round(ex2)+','+Math.round(ey2)+'): '+dropEl.tagName+' cls='+dropEl.className.toString().slice(0,30));
-				dropEl.dispatchEvent(makeEv('pointerup',ex2,ey2,true));
-				dropEl.dispatchEvent(makeEv('mouseup',ex2,ey2,true));
-				document.dispatchEvent(makeEv('pointerup',ex2,ey2,true));
-				document.dispatchEvent(makeEv('mouseup',ex2,ey2,true));
-				if(dropEl!==canvas){
-					canvas.dispatchEvent(makeEv('pointerup',ex2,ey2,true));
-					canvas.dispatchEvent(makeEv('mouseup',ex2,ey2,true));
-				}
-				dropEl.dispatchEvent(makeEv('click',ex2,ey2,false));
-				console.log('[hcdrag] done');
-			})();
-		})(${x1},${y1},${x2},${y2},${JSON.stringify(pts)})`;
-		await fr.evaluate(dragScript).catch((e: any) => console.warn(`[BrowserClaim][Recognition] drag eval err: ${e?.message}`));
-		await page.waitForTimeout(1200);
+		// 3. Move to piece with decelerating approach (human aims then corrects)
+		await page.mouse.move((px1+wx)/2+rnd(-10,10), (py1+wy)/2+rnd(-10,10), {steps: Math.round(rnd(5,8))});
+		await page.waitForTimeout(rnd(100,200));
+		await page.mouse.move(px1+rnd(-1.5,1.5), py1+rnd(-1.5,1.5), {steps: Math.round(rnd(3,5))});
+		await page.waitForTimeout(rnd(150,300)); // human pause on target
+		// 4. DRAG with bezier arc + ease-in-out velocity + jitter
+		await page.mouse.down();
+		await page.waitForTimeout(rnd(90,180)); // grip pause
+		const N=Math.round(rnd(22,30));
+		const mcx=(px1+px2)/2+rnd(-45,45), mcy=(py1+py2)/2+rnd(-28,28);
+		for(let i=1;i<=N;i++){
+			const t=i/N;
+			const bx=(1-t)*(1-t)*px1+2*(1-t)*t*mcx+t*t*px2;
+			const by=(1-t)*(1-t)*py1+2*(1-t)*t*mcy+t*t*py2;
+			await page.mouse.move(bx+rnd(-1.0,1.0), by+rnd(-1.0,1.0), {steps:1});
+			// ease: slow start, fast middle, slow end
+			const speed = t<0.5 ? (1-2*t)*55+110 : (2*(t-0.5))*55+110; // 165 -> 110 -> 165
+			await page.waitForTimeout(rnd(speed*0.7, speed*1.3));
+		}
+		await page.mouse.move(px2+rnd(-1,1), py2+rnd(-1,1), {steps:2});
+		await page.waitForTimeout(rnd(140,260)); // release pause
+		await page.mouse.up();
+		await page.waitForTimeout(rnd(600,900));
 		// debug iframe body after drag
 		try {
-			const dbg2: any = await fr.evaluate('(() => { var buts=[...document.querySelectorAll("button,[class*=\'button\']")].map(function(b){return{t:(b.textContent||"").trim().slice(0,20),c:(b.className||"").toString().slice(0,35)};}); return {body:(document.body&&document.body.innerText||"").slice(0,200),buttons:buts.slice(0,8),sub:!!document.querySelector("[class*=\'button-submit\'],[class*=\'submit\']")}; })()').catch(() => null);
+			const dbg2: any = await fr.evaluate('(() => { var buts=[...document.querySelectorAll("button,[class*=\'button\']")].map(function(b){return{t:(b.textContent||"").trim().slice(0,20),c:(b.className||"").toString().slice(0,35)};}); return {body:(document.body&&document.body.innerText||"").slice(0,200),buttons:buts.slice(0,8)}; })()').catch(() => null);
 			if (dbg2) console.log(`[BrowserClaim][Recognition] iframe dbg post-drag ${JSON.stringify(dbg2).slice(0, 1000)}`);
 		} catch {}
-		// Submit
+		// 5. SUBMIT via trusted CDP click on the submit button
 		try {
-			await fr.evaluate('(() => { var btn=document.querySelector("[class*=\'button-submit\'],.button-submit,button[type=\'submit\']"); if(btn){btn.click();console.log("[hcdrag] submit clicked");} })()');
+			const sbb:any = await fr.locator('[class*="button-submit"], .button-submit').first().boundingBox().catch(()=>null);
+			if(sbb && sbb.width>0){
+				// fr bbox is viewport-relative within page since iframe is inline in document flow
+				const sbx=sbb.x+sbb.width/2+rnd(-2,2), sby=sbb.y+sbb.height/2+rnd(-2,2);
+				await page.mouse.move(sbx+rnd(-15,15), sby+rnd(-25,-8), {steps: Math.round(rnd(4,7))});
+				await page.mouse.move(sbx, sby, {steps: Math.round(rnd(2,4))});
+				await page.waitForTimeout(rnd(120,220));
+				await page.mouse.down(); await page.waitForTimeout(rnd(60,110)); await page.mouse.up();
+				console.log(`[BrowserClaim][Recognition] submit clicked via CDP at (${sbx.toFixed(0)},${sby.toFixed(0)})`);
+			} else {
+				await fr.evaluate('(() => { var btn=document.querySelector("[class*=\'button-submit\'],.button-submit"); if(btn) btn.click(); })()');
+			}
 		} catch {}
 		await page.waitForTimeout(3000);
 		return;
