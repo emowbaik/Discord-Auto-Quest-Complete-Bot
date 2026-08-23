@@ -329,6 +329,7 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 				console.log(`[BrowserClaim][Recognition] os-mouse clicked tile ${idx} at (${s.x},${s.y})`);
 				await zzz(250 + Math.random() * 250);
 			}
+			try { const st: any = await cf.evaluate('(() => { var t=[].slice.call(document.querySelectorAll(".task-image,[class*=task-image]")); return t.map(function(e){ return (e.className||"").slice(0,60) + "|ap=" + (e.getAttribute("aria-pressed")||"-") + "|sel=" + (/select|check/i.test(e.className||"")?1:0); }); })()'); console.log(`[BrowserClaim][Recognition] tile states ${JSON.stringify(st)}`); } catch {}
 			let sb: any = null; try { sb = await cf.locator('[class*="button-submit"]:not([class*="spinner"])').first().boundingBox(); } catch {}
 			console.log(`[BrowserClaim][Recognition] submit bbox ${JSON.stringify(sb)}`);
 			if (sb && sb.width) {
@@ -337,6 +338,9 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 				await mouse.pressButton(Button.LEFT); await zzz(60);
 				await mouse.releaseButton(Button.LEFT);
 				console.log(`[BrowserClaim][Recognition] os-mouse submit at (${s.x},${s.y})`);
+				await zzz(2000);
+				try { const dbg: any = await cf.evaluate('(() => { return document.body ? document.body.innerText.slice(0,300) : ""; })()'); console.log(`[BrowserClaim][Recognition] iframe dbg post-submit ${JSON.stringify(dbg)}`); } catch {}
+				try { await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height / 2); console.log('[BrowserClaim][Recognition] cdp submit backup clicked'); } catch {}
 			} else if (clicked) {
 				try { await cf.evaluate('(() => { var b=document.querySelector("[class*=button-submit]"); if(b) b.click(); })()'); } catch {}
 			}
