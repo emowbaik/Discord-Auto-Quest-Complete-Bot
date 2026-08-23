@@ -302,62 +302,28 @@ async function applyRecognitionResult(page: any, task: HCaptchaTask, result: any
 		// Reposition offscreen iframes into viewport (invisible mode parks them at top:-9999)
 		try { await page.evaluate('(() => { var ifr=document.querySelectorAll("iframe"); for(var i=0;i<ifr.length;i++){ var f=ifr[i]; if((f.src||"").indexOf("hcaptcha")!==-1){ var r=f.getBoundingClientRect(); if(r.width>400&&r.height>400&&(r.top<0||r.left<0)){ f.style.top="90px"; f.style.left="120px"; f.style.position="fixed"; } } } })()'); } catch {}
 		const nTiles: number = await cf.evaluate('(() => { return document.querySelectorAll(".task-image,[class*=task-image]").length; })()').catch(() => 0);
-		const tbb: any[] = [];
-		for (let idx = 0; idx < nTiles; idx++) {
-			let b: any = null;
-			try { b = await cf.locator('.task-image, [class*="task-image"]').nth(idx).boundingBox(); } catch {}
-			tbb.push(b && b.width ? b : null);
-		}
-		// PRIMARY: OS-level real clicks (trusted input chain -> higher siteverify score).
-		// Synthetic el.click() tokens are issued by hCaptcha but rejected by Discord (invalid-response).
+		// CDP trusted clicks: page.mouse dispatches isTrusted=true events at exact viewport coords
 		let clicked = false;
-		try {
-			const NJ: any = await import('@nut-tree-fork/nut-js');
-			const { mouse, Point, Button } = NJ;
-			let scrW = 1920; try { scrW = await NJ.screen.width(); } catch {}
-			const m: any = await page.evaluate('(() => ({sx0:window.screenX,sy0:window.screenY,ow:window.outerWidth,iw:window.innerWidth,oh:window.outerHeight,ih:window.innerHeight,sw:(window.screen&&window.screen.width)||1920}))()');
-			const scale = Math.max(0.5, Math.min(4, m.sw > 0 ? scrW / m.sw : 1));
-			const zzz = (ms: number) => new Promise((r: any) => setTimeout(r, ms));
-			const toScr = (vx: number, vy: number) => ({ x: Math.round((m.sx0 + (m.ow - m.iw) / 2 + vx) * scale), y: Math.round((m.sy0 + (m.oh - m.ih) + vy) * scale) });
-			for (const idx of selIdx) {
-				const b = tbb[idx]; if (!b) continue;
-				const s = toScr(b.x + b.width / 2 + (Math.random() * 8 - 4), b.y + b.height / 2 + (Math.random() * 8 - 4));
-				await mouse.setPosition(new Point(s.x, s.y)); await zzz(120 + Math.random() * 180);
-				await mouse.pressButton(Button.LEFT); await zzz(60 + Math.random() * 80);
-				await mouse.releaseButton(Button.LEFT);
+		for (const idx of selIdx) {
+			if (idx >= nTiles) continue;
+			try {
+				const b = await cf.locator('.task-image, [class*="task-image"]').nth(idx).boundingBox();
+				if (!b || !b.width) continue;
+				await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await page.waitForTimeout(120 + Math.random() * 150);
+				await page.mouse.down(); await page.waitForTimeout(50 + Math.random() * 70); await page.mouse.up();
 				clicked = true;
-				console.log(`[BrowserClaim][Recognition] os-mouse clicked tile ${idx} at (${s.x},${s.y})`);
-				await zzz(250 + Math.random() * 250);
-			}
-			try { const st: any = await cf.evaluate('(() => { var t=[].slice.call(document.querySelectorAll(".task-image,[class*=task-image]")); return t.map(function(e){ return (e.className||"").slice(0,60) + "|ap=" + (e.getAttribute("aria-pressed")||"-") + "|sel=" + (/select|check/i.test(e.className||"")?1:0); }); })()'); console.log(`[BrowserClaim][Recognition] tile states ${JSON.stringify(st)}`); } catch {}
-			let sb: any = null; try { sb = await cf.locator('[class*="button-submit"]:not([class*="spinner"])').first().boundingBox(); } catch {}
-			console.log(`[BrowserClaim][Recognition] submit bbox ${JSON.stringify(sb)}`);
-			if (sb && sb.width) {
-				const s = toScr(sb.x + sb.width / 2, sb.y + sb.height / 2);
-				await mouse.setPosition(new Point(s.x, s.y)); await zzz(150 + Math.random() * 150);
-				await mouse.pressButton(Button.LEFT); await zzz(60);
-				await mouse.releaseButton(Button.LEFT);
-				console.log(`[BrowserClaim][Recognition] os-mouse submit at (${s.x},${s.y})`);
-				await zzz(2000);
-				try { const dbg: any = await cf.evaluate('(() => { return document.body ? document.body.innerText.slice(0,300) : ""; })()'); console.log(`[BrowserClaim][Recognition] iframe dbg post-submit ${JSON.stringify(dbg)}`); } catch {}
-				try { await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height / 2); console.log('[BrowserClaim][Recognition] cdp submit backup clicked'); } catch {}
-			} else if (clicked) {
-				try { await cf.evaluate('(() => { var b=document.querySelector("[class*=button-submit]"); if(b) b.click(); })()'); } catch {}
-			}
-		} catch (e: any) { console.warn(`[BrowserClaim][Recognition] os-mouse tile click failed (${e?.message}) -> synthetic fallback`); }
-		if (!clicked) {
-			// legacy synthetic path
-			for (let idx = 0; idx < (isIndices ? Math.max(...flat as number[]) + 1 : flat.length); idx++) {
-				if (isIndices ? !(flat as number[]).includes(idx) : !flat[idx]) continue;
-				try {
-					if (cf.evaluate) await cf.evaluate((i: number) => { const sels = ['.task-image', '.challenge-container .image', '[class*="task-image"]', '.image-list .image', 'div[role="button"]']; let els: Element[] = []; for (const s of sels) { const f = document.querySelectorAll(s); if (f.length >= 9) { els = Array.from(f); break; } if (f.length > els.length) els = Array.from(f); } if (els[i]) (els[i] as HTMLElement).click(); }, idx);
-					else await cf.locator('.task-image').nth(idx).click({ timeout: 5000 }).catch(() => {});
-					await page.waitForTimeout(250);
-				} catch {}
-			}
-			try { if (cf.evaluate) await cf.evaluate('(() => { var b=(document.querySelector("[class*=button-submit]")||document.querySelector("div.button-submit")||document.querySelector("button[type=submit]")); if(b) b.click(); })()'); else await cf.locator('[class*="button-submit"], button').first().click({ timeout: 3000 }).catch(() => {}); } catch {}
+				console.log(`[BrowserClaim][Recognition] cdp clicked tile ${idx} at (${Math.round(b.x + b.width / 2)},${Math.round(b.y + b.height / 2)})`);
+				await page.waitForTimeout(250 + Math.random() * 200);
+			} catch {}
 		}
-		await page.waitForTimeout(1500); return;
+		try {
+			const sb = await cf.locator('[class*="button-submit"]:not([class*="spinner"])').first().boundingBox();
+			console.log(`[BrowserClaim][Recognition] submit bbox ${JSON.stringify(sb)}`);
+			if (sb && sb.width) { await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height / 2); console.log('[BrowserClaim][Recognition] cdp submit clicked'); }
+			await page.waitForTimeout(1500);
+			try { const dbg: any = await cf.evaluate('(() => { return document.body ? document.body.innerText.slice(0,300) : ""; })()'); console.log(`[BrowserClaim][Recognition] iframe dbg post-submit ${JSON.stringify(dbg)}`); } catch {}
+		} catch {}
+		return;
 	}
 	if (reqType === 'image_drag_drop') {
 		console.log(`[BrowserClaim][Recognition] ${reqType} result: ${JSON.stringify(result).slice(0, 600)}`);

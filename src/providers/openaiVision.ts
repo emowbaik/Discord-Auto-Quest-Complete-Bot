@@ -56,9 +56,8 @@ export class OpenAIVisionSolver {
 		let parsed: any;
 		try { parsed = JSON.parse(cleaned); } catch { let si = cleaned.indexOf('{'); if (si === -1) si = cleaned.indexOf('['); if (si === -1) throw new Error('Non-JSON: ' + raw.slice(0, 200)); parsed = JSON.parse(cleaned.slice(si)); }
 		if (reqType==='image_label_binary') { if (!Array.isArray(parsed)) throw new Error('Expected 2D bool'); return parsed; }
-		// Normalized 0.0-1.0 coords -> scale to 0-500 for browserClaim compatibility
-		const clamp01 = (n: number) => Math.max(0, Math.min(1, Number(n) || 0));
-		const scale = (n: number) => Math.round(clamp01(n) * 500);
+		// Normalized 0.0-1.0 OR raw pixel 0-500 -> clamp to 0-500 (heuristic: values >1.5 are already pixels)
+		const scale = (n: number) => { const v = Number(n); if (!isFinite(v)) return 0; return v <= 1.5 ? Math.round(Math.max(0, v) * 500) : Math.round(Math.min(500, Math.max(0, v))); };
 		if (reqType==='image_drag_drop') {
 			const eid=(task.tasklist&&task.tasklist[0]&&task.tasklist[0].task_key)||'e0';
 			// Tolerant extraction: models may return {x,y}, [{x,y}], {target:{x,y}}, or numeric strings
